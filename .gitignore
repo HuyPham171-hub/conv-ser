@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+# Python virtual environment
+con.env/
+
+# Large artifacts and datasets
+Data/
+Models/
+Results/
+Zip/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
