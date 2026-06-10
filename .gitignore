@@ -3,6 +3,9 @@ __pycache__/
 
 # Python virtual environment
 con.env/
+.venv/
+venv/
+ENV/
 
 # Large artifacts and datasets
 Data/
@@ -12,4 +15,5 @@ Zip/
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
+checkpoints/
 

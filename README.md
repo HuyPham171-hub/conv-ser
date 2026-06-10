@@ -1,101 +1,151 @@
-# Speech Emotion Recognition Workspace
+# Speech Emotion & Sentiment Recognition (SER) workspace
 
-![Python](https://img.shields.io/badge/Python-3.12-blue.svg)
-![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-orange.svg)
-![HuggingFace](https://img.shields.io/badge/HuggingFace-Transformers-yellow.svg)
-![TensorFlow](https://img.shields.io/badge/TensorFlow-CNN%20Baselines-orange.svg)
+End-to-end pipeline for:
+- 8-way Speech Emotion Recognition (SER) with Wav2Vec2 and CNN baselines.
+- 3-way Sentiment (Negative, Neutral, Positive) using a sentiment head on top of the SER model and via emotion→sentiment mapping.
 
-This repository contains a speech emotion recognition workspace focused on two main tasks:
+Key notebooks and scripts:
+- Data conversion and preprocessing: [to_ravdess_format.ipynb](to_ravdess_format.ipynb), [preprocessing.ipynb](preprocessing.ipynb)
+- Feature extraction (MFCC, Log-Mel, spectrogram images): [extract_features.ipynb](extract_features.ipynb)
+- Wav2Vec2 training + sentiment head: [wav2vec2_emo.ipynb](wav2vec2_emo.ipynb)
+- CNN baselines: [Scipts/cnn_overlap.ipynb](Scipts/cnn_overlap.ipynb), [Scipts/cnn_rnn_emos.ipynb](Scipts/cnn_rnn_emos.ipynb)
+- Simple UI tests (voice wake word demo): [test.py](test.py), [test2.py](test2.py)
 
-- 8-way Speech Emotion Recognition (SER) from raw audio.
-- 3-way sentiment classification derived from emotion labels and balanced sentiment datasets.
+Models are saved to:
+- 8-emotion Wav2Vec2: [Models/wav2vec2/final-model](Models/wav2vec2/final-model)
+- 3-sentiment head weights: [Models/wav2vec2_sentiment/final/model.safetensors](Models/wav2vec2_sentiment/final/model.safetensors)
 
-The project is organized around preprocessing, Wav2Vec2 fine-tuning, CNN baselines, cross-dataset experiments, and sentiment grouping. The main working area is the [Ser/](Ser/) folder.
-
-## Key Capabilities
-
-- Audio preprocessing with silence trimming, Wiener denoising, and amplitude normalization.
-- Emotion grouping from 8 SER classes into Negative, Moderate, and Positive sentiment labels.
-- Wav2Vec2-based SER and sentiment experiments.
-- CNN baselines built on spectrogram and full-frequency image features.
-- Dataset and metadata preparation for both raw audio and spectrogram-based workflows.
-
-## Main Project Layout
-
-- [Ser/](Ser/): Primary SER workspace with notebooks, scripts, processed CSVs, and audio artifacts.
-- [IEMOCAP_full_release/](IEMOCAP_full_release/): Raw IEMOCAP corpus and documentation.
-- [Chatbot/](Chatbot/): Reference workspace with related SER/Sentiment notebooks and notes.
-
-Inside [Ser/](Ser/) you will find:
-
-- [preprocessing.ipynb](Ser/preprocessing.ipynb): Audio trimming, denoising, and normalization.
-- [group_wav2vec2.ipynb](Ser/group_wav2vec2.ipynb) and [group_wav2vec2_v2.ipynb](Ser/group_wav2vec2_v2.ipynb): Emotion-to-sentiment mapping, balancing, and Wav2Vec2 sentiment experiments.
-- [cross_wav2vec2.ipynb](Ser/cross_wav2vec2.ipynb): Cross-dataset Wav2Vec2 workflow.
-- [goup_cnn.ipynb](Ser/goup_cnn.ipynb): CNN baseline training.
-- [augmentation.py](Ser/augmentation.py): Audio augmentation helpers used by the notebooks.
-- [Script/](Ser/Script/): Additional notebook variants for cross-domain and grouped training runs.
-
-## Data Artifacts
-
-- [Ser/Data/](Ser/Data/): Dataset folders, preprocessed audio, spectrogram images, and metadata.
-- [Ser/DataFrame/](Ser/DataFrame/): Master and processed CSV files.
-
-Notable files:
-
-- [Ser/DataFrame/combined_df.csv](Ser/DataFrame/combined_df.csv)
-- [Ser/DataFrame/processed_df.csv](Ser/DataFrame/processed_df.csv)
-- [Ser/DataFrame/processed_sentiment_df.csv](Ser/DataFrame/processed_sentiment_df.csv)
-- [Ser/DataFrame/processed_sentiment_balanced.csv](Ser/DataFrame/processed_sentiment_balanced.csv)
-- [Ser/Data/spectrogram_metadata.csv](Ser/Data/spectrogram_metadata.csv)
+Data lives under:
+- Original/converted audio: [Data/Dataset/](Data/Dataset/)
+- Preprocessed audio: [Data/Preprocessed_data/](Data/Preprocessed_data/)
+- DataFrames/CSVs: [Data/DataFrame/](Data/DataFrame/)
+- Spectrogram metadata: [Data/spectrogram_metadata.csv](Data/spectrogram_metadata.csv)
 
 ## Setup
 
-The Ser workspace targets Python 3.12 and uses the dependencies listed in [Ser/requirements.txt](Ser/requirements.txt).
+- Python 3.12 (see [requirements.txt](requirements.txt))
 
 ```sh
-pip install -r Ser/requirements.txt
+pip install -r requirements.txt
 ```
 
-Recommended: open the notebooks in VS Code and run them in the provided order so the CSV and audio artifacts are generated before training.
+Recommended: run notebooks in VS Code and use the provided cells.
 
-## Workflow
+## Pipeline overview
 
-1. Preprocess audio
-- Run [Ser/preprocessing.ipynb](Ser/preprocessing.ipynb) to trim silence, denoise, normalize, and save cleaned WAV files under [Ser/Data/Preprocessed_data/](Ser/Data/Preprocessed_data/).
+1) Convert external datasets to RAVDESS-like structure
+- Use [to_ravdess_format.ipynb](to_ravdess_format.ipynb) to normalize TESS, SAVEE, CREMA-D into RAVDESS-style filenames/folders under [Data/Dataset/](Data/Dataset/).
 
-2. Build master metadata tables
-- Use the notebooks in [Ser/](Ser/) and [Ser/Script/](Ser/Script/) to combine sources into [Ser/DataFrame/combined_df.csv](Ser/DataFrame/combined_df.csv) and the processed SER/sentiment CSVs.
+2) Preprocess audio (trim, denoise, normalize)
+- Run [preprocessing.ipynb](preprocessing.ipynb) to create cleaned wavs in [Data/Preprocessed_data/](Data/Preprocessed_data/).
 
-3. Train Wav2Vec2 models
-- Use [Ser/group_wav2vec2.ipynb](Ser/group_wav2vec2.ipynb), [Ser/group_wav2vec2_v2.ipynb](Ser/group_wav2vec2_v2.ipynb), and [Ser/cross_wav2vec2.ipynb](Ser/cross_wav2vec2.ipynb) for SER and sentiment experiments.
+3) Build a master dataframe and speaker-independent splits
+- In [wav2vec2_emo.ipynb](wav2vec2_emo.ipynb):
+  - Combine sources → [Data/DataFrame/preprocessed_df.csv](Data/DataFrame/preprocessed_df.csv)
+  - Split by actor per dataset → [Data/DataFrame/train_ser.csv](Data/DataFrame/train_ser.csv), [Data/DataFrame/val_ser.csv](Data/DataFrame/val_ser.csv), [Data/DataFrame/test_ser.csv](Data/DataFrame/test_ser.csv)
 
-4. Train CNN baselines
-- Use [Ser/goup_cnn.ipynb](Ser/goup_cnn.ipynb) for spectrogram-based CNN experiments.
+4) Feature extraction (optional for CNN baselines)
+- Use [extract_features.ipynb](extract_features.ipynb) to create:
+  - MFCC/Log-Mel arrays under [Features/](Features/)
+  - Full-resolution spectrogram PNGs and [Data/DataFrame/spectrogram_metadata.csv](Data/DataFrame/spectrogram_metadata.csv)
 
-5. Use generated features
-- Spectrograms and full-frequency images are stored under [Ser/Data/Spectrograms/](Ser/Data/Spectrograms/), [Ser/Data/Spectrograms_filter/](Ser/Data/Spectrograms_filter/), and [Ser/Data/Spectrogram_fullfreq/](Ser/Data/Spectrogram_fullfreq/).
+## Training and evaluation
 
-## Notes
+### A) Wav2Vec2 — 8 emotions
 
-- The project uses speaker- and dataset-aware splits in the notebooks to reduce leakage.
-- Sentiment labels are derived by grouping emotions into Negative, Moderate, and Positive classes.
-- The exact preprocessing and training settings may differ slightly between notebook versions, so treat the notebooks as the source of truth.
+- In [wav2vec2_emo.ipynb](wav2vec2_emo.ipynb):
+  - Load splits into Hugging Face Datasets
+  - Tokenize with `AutoFeatureExtractor("facebook/wav2vec2-base")`
+  - Train `AutoModelForAudioClassification` and save to [Models/wav2vec2/final-model](Models/wav2vec2/final-model)
+  - Evaluate on test split with classification report and confusion matrix
 
-## Directory Snapshot
+Inference example (single .wav → emotion):
 
-```text
+```python
+from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
+import librosa, torch, numpy as np
+
+model_id = "Models/wav2vec2/final-model"
+extractor = AutoFeatureExtractor.from_pretrained(model_id)
+model = AutoModelForAudioClassification.from_pretrained(model_id).eval()
+
+def predict_emotion(wav_path):
+    audio, _ = librosa.load(wav_path, sr=extractor.sampling_rate)
+    inputs = extractor(audio, sampling_rate=extractor.sampling_rate, return_tensors="pt",
+                       padding="max_length", truncation=True, max_length=int(extractor.sampling_rate*4.5))
+    with torch.no_grad():
+        logits = model(**inputs).logits
+    pred = int(torch.argmax(logits, dim=-1))
+    return model.config.id2label[pred]
+```
+
+### B) Sentiment head (Negative/Neutral/Positive)
+
+- Dataset: [Data/DataFrame/sentiment_balanced.csv](Data/DataFrame/sentiment_balanced.csv) → mapped to labels {0,1,2}
+- In [wav2vec2_emo.ipynb](wav2vec2_emo.ipynb):
+  - Replace raw paths with preprocessed paths
+  - Build HF Dataset from `path,label`
+  - Define `Wav2Vec2Sentiment` wrapping the frozen base’s `wav2vec2` encoder and a linear head
+  - Train/evaluate with `Trainer`
+  - Save weights to [Models/wav2vec2_sentiment/final/model.safetensors](Models/wav2vec2_sentiment/final/model.safetensors)
+
+Evaluate-only (loads frozen base + sentiment head) is included at the end of [wav2vec2_emo.ipynb](wav2vec2_emo.ipynb) and prints metrics plus a confusion matrix.
+
+### C) Sentiment via emotion grouping
+
+- In [wav2vec2_emo.ipynb](wav2vec2_emo.ipynb), two analyses exist:
+  1) Direct 3-way sentiment model evaluation (from the trained head).
+  2) 8-emotion predictions mapped to sentiment groups:
+     - Positive: happy, surprise
+     - Neutral: neutral, calm
+     - Negative: angry, sad, fear, disgust
+  - Both produce classification reports and confusion matrices.
+
+## CNN baselines (spectrograms)
+
+- Pure CNN with overlapping time windows: [Scipts/cnn_overlap.ipynb](Scipts/cnn_overlap.ipynb)
+- CNN + BiLSTM (time-distributed features): [Scipts/cnn_rnn_emos.ipynb](Scipts/cnn_rnn_emos.ipynb)
+- Models and histories saved under [Models/logmel/](Models/logmel/)
+
+These rely on spectrogram PNGs and metadata produced by [extract_features.ipynb](extract_features.ipynb).
+
+## Data artifacts
+
+- Master and split CSVs:
+  - [Data/DataFrame/combined_df.csv](Data/DataFrame/combined_df.csv)
+  - [Data/DataFrame/preprocessed_df.csv](Data/DataFrame/preprocessed_df.csv)
+  - [Data/DataFrame/train_ser.csv](Data/DataFrame/train_ser.csv)
+  - [Data/DataFrame/val_ser.csv](Data/DataFrame/val_ser.csv)
+  - [Data/DataFrame/test_ser.csv](Data/DataFrame/test_ser.csv)
+  - [Data/DataFrame/sentiment_balanced.csv](Data/DataFrame/sentiment_balanced.csv)
+
+- Preprocessed audio: [Data/Preprocessed_data/](Data/Preprocessed_data/)
+- Spectrogram metadata: [Data/DataFrame/spectrogram_metadata.csv](Data/DataFrame/spectrogram_metadata.csv)
+
+## Notes and tips
+
+- Ensure sampling rate consistency (Wav2Vec2 expects 16k by default for facebook/wav2vec2-base; code resamples as needed).
+- Audio is padded/truncated to ~4–5 seconds for stable batching.
+- Actor-based splits prevent speaker leakage across train/val/test.
+- For Windows paths in CSVs, normalization is applied in notebooks.
+
+## Folder layout
+
+```
 .
-├─ README.md
-├─ IEMOCAP_full_release/
-├─ Chatbot/
-└─ Ser/
-   ├─ augmentation.py
-   ├─ preprocessing.ipynb
-   ├─ group_wav2vec2.ipynb
-   ├─ group_wav2vec2_v2.ipynb
-   ├─ cross_wav2vec2.ipynb
-   ├─ goup_cnn.ipynb
-   ├─ Script/
-   ├─ Data/
-   └─ DataFrame/
+├─ wav2vec2_emo.ipynb
+├─ preprocessing.ipynb
+├─ extract_features.ipynb
+├─ to_ravdess_format.ipynb
+├─ Scipts/
+│  ├─ cnn_overlap.ipynb
+│  └─ cnn_rnn_emos.ipynb
+├─ Models/
+│  ├─ wav2vec2/final-model/
+│  └─ wav2vec2_sentiment/final/model.safetensors
+├─ Data/
+│  ├─ Preprocessed_data/
+│  ├─ Dataset/
+│  └─ DataFrame/
+└─ Features/
 ```
