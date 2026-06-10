@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
 import torch
-import torchaudio
 import numpy as np
-from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model
+import librosa
+from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2Config
 from tqdm import tqdm
 
 # =====================================================================
@@ -21,49 +21,97 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # =====================================================================
 # 2. INITIALIZE BASE WAV2VEC2 MODEL
 # =====================================================================
+# Path to your local fine-tuned checkpoint directory
 MODEL_NAME = r"d:\Resfes\Project\Ser\checkpoints\wav2vec2_sentiment"
 
 # Auto-detect compute device (Prioritize CUDA GPU for speed)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Using compute device: {device}")
+print(f"[INFO] Loading Fine-Tuned Wav2Vec2 model from: {MODEL_NAME}...")
 
-print(f"[INFO] Loading Wav2Vec2 model ({MODEL_NAME})...")
+# Initialize the standalone feature extractor
 processor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_NAME)
-model = Wav2Vec2Model.from_pretrained(MODEL_NAME).to(device)
-model.eval()  # Set to evaluation mode (freeze Dropout/BatchNorm)
+
+# Initialize an empty base model architecture using your local config layout
+config = Wav2Vec2Config.from_pretrained(MODEL_NAME)
+model = Wav2Vec2Model(config)
+
+# Detect weight file formats (Prioritize modern safetensors over legacy bin)
+safetensors_path = os.path.join(MODEL_NAME, "model.safetensors")
+bin_path = os.path.join(MODEL_NAME, "pytorch_model.bin")
+
+if os.path.exists(safetensors_path):
+    from safetensors.torch import load_file
+    state_dict = load_file(safetensors_path)
+    print("[INFO] Found and loading model.safetensors")
+elif os.path.exists(bin_path):
+    state_dict = torch.load(bin_path, map_location="cpu")
+    print("[INFO] Found and loading pytorch_model.bin")
+else:
+    raise FileNotFoundError(f"No valid weight files (model.safetensors or pytorch_model.bin) found in {MODEL_NAME}!")
+
+# WEIGHT SURGERY: Strip custom wrapper prefixes to align with base Wav2Vec2Model keys
+new_state_dict = {}
+for key, value in state_dict.items():
+    # 1. Strip custom architecture nested wrapper prefix (e.g., 'base.wav2vec2.encoder...' -> 'encoder...')
+    if key.startswith("base.wav2vec2."):
+        new_key = key.replace("base.wav2vec2.", "") 
+        new_state_dict[new_key] = value
+        
+    # 2. Strip standard base prefix while filtering out classification heads (e.g., classifier, projector)
+    elif key.startswith("base.") and not any(head in key for head in ["classifier", "projector"]):
+        new_key = key.replace("base.", "")
+        new_state_dict[new_key] = value
+        
+    # 3. Handle vanilla Hugging Face wrapper conversion format if present
+    elif key.startswith("wav2vec2."):
+        new_key = key.replace("wav2vec2.", "")
+        new_state_dict[new_key] = value
+        
+    # 4. Explicitly drop all evaluation/classification heads (e.g., sent_head, classifier) to avoid unexpected key warnings
+    elif any(head in key for head in ["sent_head", "classifier", "projector"]):
+        continue
+        
+    # 5. Keep remaining standard root keys intact
+    else:
+        new_state_dict[key] = value
+
+# Load the surgically cleaned state dictionary into the base model structure
+msg = model.load_state_dict(new_state_dict, strict=False)
+print(f"[INFO] Load weights status: {msg}")
+
+# Deploy model weights to selected hardware and freeze for feature extraction
+model = model.to(device)
+model.eval()
 
 # =====================================================================
 # 3. FUNCTION TO EXTRACT ACOUSTIC EMBEDDING
 # =====================================================================
 def extract_acoustic_embedding(file_path):
     """
-    Load audio file, resample to 16kHz, extract hidden features,
-    and apply Mean Pooling to generate a fixed 768-dimensional embedding vector.
+    Load an audio file using Librosa, automatically resample to 16kHz,
+    extract hidden state features using Wav2Vec2, and apply Mean Pooling 
+    to generate a fixed-size 768-dimensional embedding vector.
     """
-    # Load raw audio waveform
-    waveform, sample_rate = torchaudio.load(file_path)
+    # Load audio and automatically resample to 16000Hz (Wav2Vec2 strict requirement)
+    # Librosa returns a flat 1D numpy array and the effective sampling rate
+    waveform, _ = librosa.load(file_path, sr=16000)
     
-    # Standardize sampling rate (Wav2Vec2 strictly requires 16000Hz)
-    if sample_rate != 16000:
-        resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)
-        waveform = resampler(waveform)
-    
-    # Convert tensor to a flat 1D array (Squeeze channel dimension)
-    waveform = waveform.squeeze().numpy()
-    
-    # Preprocess input signal using Transformer's Feature Extractor
+    # Preprocess the 1D signal using Transformer's Feature Extractor
+    # This standardizes the audio input tensor before feeding it into the deep learning network
     inputs = processor(waveform, sampling_rate=16000, return_tensors="pt", padding=True)
     input_values = inputs.input_values.to(device)
     
-    # Extract hidden features without calculating gradients (saves GPU memory)
+    # Extract hidden features without calculating gradients (drastically reduces VRAM/GPU usage)
     with torch.no_grad():
         outputs = model(input_values)
         
-    # Get the last hidden state matrix: shape (batch_size=1, time_steps, hidden_size=768)
+    # Retrieve the final hidden state matrix
+    # Shape: (batch_size=1, time_steps, hidden_size=768)
     last_hidden_state = outputs.last_hidden_state
     
-    # MEAN POOLING: Calculate the mean along the time axis (dim=1)
-    # This removes sequence length variations, keeping a static feature vector (768,)
+    # MEAN POOLING: Compute the average across the temporal dimension (dim=1)
+    # This eliminates sequence length variations, resulting in a static feature vector of shape (768,)
     utterance_embedding = torch.mean(last_hidden_state, dim=1).squeeze().cpu().numpy()
     
     return utterance_embedding
