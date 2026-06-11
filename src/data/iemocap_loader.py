@@ -1,0 +1,131 @@
+"""
+IEMOCAP Conversational DataLoader Module
+Provides sequence structuring and PyTorch Dataset class for Contextual Emotion Tracking (Goal 3).
+"""
+
+import os
+import pandas as pd
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+def build_conversational_sequences(metadata_path, window_size=3):
+    """
+    Reads metadata, groups utterances by Dialog_ID, and constructs 
+    sliding window sequences with temporal zero-padding for initial turns.
+    
+    Args:
+        metadata_path (str): Path to the parsed iemocap_metadata.csv.
+        window_size (int): Size of the contextual sliding window (Default: 3).
+        
+    Returns:
+        tuple: (sequences, targets_stage1, targets_stage2)
+    """
+    print("[INFO] Loading and sorting metadata...")
+    df = pd.read_csv(metadata_path)
+    
+    # Ensure chronological order (Session -> Dialog -> Turn) to maintain temporal integrity
+    df = df.sort_values(by=['Session', 'Dialog_ID', 'Turn_Order']).reset_index(drop=True)
+    
+    sequences = []
+    targets_stage1 = []
+    targets_stage2 = []
+    
+    print(f"[INFO] Applying sliding window mechanism (N={window_size}) across dialogues...")
+    
+    # Group by independent conversational sessions to avoid context leakage across dialogues
+    for dialog_id, group in df.groupby('Dialog_ID'):
+        utterances = group['Utterance_ID'].tolist()
+        s1_labels = group['Stage1_Label'].tolist()
+        s2_labels = group['Stage2_Label'].tolist()
+        
+        num_turns = len(utterances)
+        
+        for t in range(num_turns):
+            current_utt = utterances[t]
+            
+            # Extract target labels for the current utterance (t)
+            # Label -1 indicates an unknown or unmapped label (ignored during loss calculation)
+            lbl_s1 = s1_labels[t]
+            lbl_s2 = s2_labels[t]
+            
+            # ---------------------------------------------------
+            # TEMPORAL ZERO-PADDING LOGIC (For N=3)
+            # ---------------------------------------------------
+            if t == 0:
+                # First turn: No historical context. Pad with two None tokens.
+                seq = [None, None, current_utt]
+            elif t == 1:
+                # Second turn: Only one historical utterance available. Pad with one None token.
+                seq = [None, utterances[t-1], current_utt]
+            else:
+                # Third turn onwards: Full historical context available [U_{t-2}, U_{t-1}, U_t]
+                seq = [utterances[t-2], utterances[t-1], current_utt]
+                
+            sequences.append(seq)
+            targets_stage1.append(lbl_s1)
+            targets_stage2.append(lbl_s2)
+            
+    print(f"[SUCCESS] Generated {len(sequences)} sequence windows.")
+    return sequences, targets_stage1, targets_stage2
+
+
+class IEMOCAPConversationalDataset(Dataset):
+    """
+    Custom PyTorch Dataset for Conversational Emotion Tracking.
+    Dynamically maps Utterance IDs to their corresponding 768-D acoustic embeddings.
+    """
+    def __init__(self, metadata_path, embeddings_npy_path, target_stage=1):
+        """
+        Initializes the Dataset by loading the embedding dictionary and building sequence structures.
+        
+        Args:
+            metadata_path (str): Path to iemocap_metadata.csv.
+            embeddings_npy_path (str): Path to the static embeddings dictionary (.npy).
+            target_stage (int): 1 for Coarse Sentiment (3 classes), 2 for Fine-grained (5 classes).
+        """
+        super().__init__()
+        self.target_stage = target_stage
+        
+        print("[INFO] Loading 768-D acoustic embeddings into memory...")
+        self.embeddings_dict = np.load(embeddings_npy_path, allow_pickle=True).item()
+        
+        # Build logical sequences and labels
+        self.sequences, self.targets_s1, self.targets_s2 = build_conversational_sequences(metadata_path)
+        
+        # Define a zero-vector for padding missing historical contexts
+        # Shape: (768,) matching the Wav2Vec2 output dimension
+        self.zero_padding_vector = np.zeros(768, dtype=np.float32)
+
+    def __len__(self):
+        """Returns the total number of sliding window sequences."""
+        return len(self.sequences)
+
+    def __getitem__(self, idx):
+        """
+        Retrieves a single sequence batch (X) and its target label (y).
+        """
+        # Retrieve the sequence of Utterance IDs (length 3)
+        seq_utt_ids = self.sequences[idx]
+        
+        # Select target label based on the requested hierarchical stage
+        target_label = self.targets_s1[idx] if self.target_stage == 1 else self.targets_s2[idx]
+        
+        window_embeddings = []
+        
+        # Iterate through U_{t-2}, U_{t-1}, U_t
+        for utt_id in seq_utt_ids:
+            if utt_id is None:
+                # Apply Zero-Padding for initial conversation turns
+                window_embeddings.append(self.zero_padding_vector)
+            else:
+                # Fetch actual acoustic embedding. Fallback to zero-vector if ID is missing.
+                embedding = self.embeddings_dict.get(utt_id, self.zero_padding_vector)
+                window_embeddings.append(embedding)
+                
+        # Convert the list of 3 vectors into a PyTorch Tensor
+        # Output shape: (3, 768)
+        X_tensor = torch.tensor(np.array(window_embeddings), dtype=torch.float32)
+        y_tensor = torch.tensor(target_label, dtype=torch.long)
+        
+        return X_tensor, y_tensor
