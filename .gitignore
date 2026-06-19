@@ -1,19 +1,23 @@
+# Python cache
 __pycache__/
 *.py[cod]
 
-# Python virtual environment
+# Virtual environments
 con.env/
 .venv/
 venv/
 ENV/
 
-# Large artifacts and datasets
+# Large artifacts and datasets (root-level only)
 Data/
 Models/
 Results/
 Zip/
 
-# Jupyter checkpoints
+# Jupyter
 .ipynb_checkpoints/
 checkpoints/
 
+# Keep everything inside src
+!src/
+!src/**

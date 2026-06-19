@@ -5,7 +5,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 # =====================================================================
-# 1. PATH CONFIGURATION (Matches your specific structure)
+# 1. PATH CONFIGURATION
 # =====================================================================
 IEMOCAP_ROOT_DIR = r"d:\Resfes\Project\IEMOCAP_full_release"
 OUTPUT_CSV_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
@@ -14,7 +14,7 @@ OUTPUT_CSV_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
 os.makedirs(os.path.dirname(OUTPUT_CSV_PATH), exist_ok=True)
 
 # =====================================================================
-# 2. MAPPING LOGIC (Based on your 2-Stage Hierarchical Specification)
+# 2. MAPPING LOGIC (Based on 2-Stage Hierarchical Specification)
 # =====================================================================
 def map_stage1_sentiment(emotion):
     """ Coarse Sentiment Classification (3 Classes) """

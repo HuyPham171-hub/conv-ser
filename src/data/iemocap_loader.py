@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import traceback
 
 def build_conversational_sequences(metadata_path, window_size=3):
     """
@@ -21,8 +22,28 @@ def build_conversational_sequences(metadata_path, window_size=3):
     Returns:
         tuple: (sequences, targets_stage1, targets_stage2)
     """
-    print("[INFO] Loading and sorting metadata...")
-    df = pd.read_csv(metadata_path)
+    print("[INFO] Loading and sorting metadata...", flush=True) # flush=True forces immediate terminal output
+    
+    # ---------------------------------------------------------
+    # AGGRESSIVE DEBUG BLOCK START
+    # ---------------------------------------------------------
+    try:
+        print(f"  -> [DEBUG] Attempting to read CSV from: {metadata_path}", flush=True)
+        df = pd.read_csv(metadata_path, engine='python')
+        print(f"  -> [DEBUG] CSV loaded successfully! Shape: {df.shape}", flush=True)
+        
+        print("  -> [DEBUG] Attempting to sort values...", flush=True)
+        df = df.sort_values(by=['Session', 'Dialog_ID', 'Turn_Order']).reset_index(drop=True)
+        print("  -> [DEBUG] Sorting complete!", flush=True)
+        
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR DURING PANDAS OPERATION]: {e}", flush=True)
+        traceback.print_exc()
+        import sys
+        sys.exit(1)
+    # ---------------------------------------------------------
+    # AGGRESSIVE DEBUG BLOCK END
+    # ---------------------------------------------------------
     
     # Ensure chronological order (Session -> Dialog -> Turn) to maintain temporal integrity
     df = df.sort_values(by=['Session', 'Dialog_ID', 'Turn_Order']).reset_index(drop=True)
