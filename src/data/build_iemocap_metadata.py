@@ -71,7 +71,7 @@ def parse_iemocap_evaluations():
                     
                     # 3. Extract Session ID (Used for LOSO cross-validation setup)
                     # Ses01F_impro01 -> The 4th character represents the session index number '1'
-                    session_id = int(utt_id[3])
+                    session_id = int(utt_id[4])
                     
                     # 4. Classify Scenario Setup (Improvised vs Scripted)
                     is_impro = 1 if 'impro' in dialog_id else 0
