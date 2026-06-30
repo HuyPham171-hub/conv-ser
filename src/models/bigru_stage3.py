@@ -11,7 +11,7 @@ class ConversationalBiGRU(nn.Module):
     A Bidirectional GRU network designed to process sequences of acoustic embeddings
     and predict the contextual emotion of the current utterance using a Many-to-One architecture.
     """
-    def __init__(self, input_dim=768, hidden_dim=256, num_layers=2, num_classes=3, dropout_rate=0.3):
+    def __init__(self, input_dim=768, hidden_dim=256, num_layers=2, num_classes=8, dropout_rate=0.3):
         """
         Initializes the Bi-GRU model parameters.
         
@@ -19,7 +19,7 @@ class ConversationalBiGRU(nn.Module):
             input_dim (int): Dimension of the input acoustic embeddings (Default: 768 for Wav2Vec2).
             hidden_dim (int): Number of features in the GRU hidden state (Default: 256).
             num_layers (int): Number of recurrent layers (Default: 2 for deeper temporal abstraction).
-            num_classes (int): Number of output classes (3 for Stage 1 Sentiment, 5 for Stage 2 Fine-grained).
+            num_classes (int): Number of output classes (8 for Flat Classification Baseline).
             dropout_rate (float): Dropout probability to prevent overfitting on small datasets.
         """
         super(ConversationalBiGRU, self).__init__()
@@ -54,7 +54,7 @@ class ConversationalBiGRU(nn.Module):
             nn.Linear(128, num_classes)
         )
 
-    def forward(self, x):
+    def forward(self, x, return_hidden=False):
         """
         Defines the forward pass of the network.
         
@@ -82,6 +82,10 @@ class ConversationalBiGRU(nn.Module):
         # Compute final class probabilities (logits)
         # logits shape: (batch_size, num_classes)
         logits = self.classifier(regularized_out)
+
+        # Return the 512-D hidden state if requested
+        if return_hidden:
+            return logits, regularized_out
         
         return logits
 
@@ -95,12 +99,12 @@ if __name__ == "__main__":
     # Batch Size = 32, Sequence Length N = 3, Acoustic Embedding = 768
     dummy_input = torch.randn(32, 3, 768)
     
-    # Instantiate model for Stage 1 (3 classes: Neg, Neu, Pos)
-    model_stage1 = ConversationalBiGRU(input_dim=768, hidden_dim=256, num_classes=3)
+    # Instantiate model for Flat 8-Class Baseline
+    model_baseline = ConversationalBiGRU(input_dim=768, hidden_dim=256, num_classes=8)
     
     # Forward pass
-    output_stage1 = model_stage1(dummy_input)
+    output_baseline = model_baseline(dummy_input)
     
     print(f"Input Shape       : {dummy_input.shape}")
-    print(f"Output Shape (S1) : {output_stage1.shape} -> Expected: [32, 3]")
-    print("[SUCCESS] Bi-GRU Architecture is ready for training!")
+    print(f"Output Shape      : {output_baseline.shape} -> Expected: [32, 8]")
+    print("[SUCCESS] Bi-GRU 8-Class Architecture is ready for training!")

@@ -48,27 +48,49 @@ def build_conversational_sequences(metadata_path, window_size=3):
     # Ensure chronological order (Session -> Dialog -> Turn) to maintain temporal integrity
     df = df.sort_values(by=['Session', 'Dialog_ID', 'Turn_Order']).reset_index(drop=True)
     
+    # ---------------------------------------------------------
+    # EMOTION TO INDEX MAPPING (8 CLASSES)
+    # Merging 'exc' (Excitement) into 'hap' (Happiness) is a standard 
+    # academic practice for IEMOCAP due to their extreme acoustic overlap.
+    # Unmapped labels like 'xxx' or 'oth' default to -1 (ignored during training).
+    # ---------------------------------------------------------
+    EMOTION_TO_IDX = {
+        'neu': 0,
+        'hap': 1,
+        'exc': 1, 
+        'sad': 2,
+        'ang': 3,
+        'fru': 4,
+        'fea': 5,
+        'sur': 6,
+        'dis': 7
+    }
+    
     sequences = []
-    targets_stage1 = []
-    targets_stage2 = []
+    targets = []
     
     print(f"[INFO] Applying sliding window mechanism (N={window_size}) across dialogues...")
     
     # Group by independent conversational sessions to avoid context leakage across dialogues
     for dialog_id, group in df.groupby('Dialog_ID'):
         utterances = group['Utterance_ID'].tolist()
-        s1_labels = group['Stage1_Label'].tolist()
-        s2_labels = group['Stage2_Label'].tolist()
         
+        # Dynamically find the emotion column (handles both 'Raw_Emotion' and 'Emotion' namings)
+        if 'Raw_Emotion' in group.columns:
+            emotions = group['Raw_Emotion'].tolist()
+        elif 'Emotion' in group.columns:
+            emotions = group['Emotion'].tolist()
+        else:
+            raise ValueError("Could not find 'Raw_Emotion' or 'Emotion' column in metadata!")
+            
         num_turns = len(utterances)
         
         for t in range(num_turns):
             current_utt = utterances[t]
             
-            # Extract target labels for the current utterance (t)
-            # Label -1 indicates an unknown or unmapped label (ignored during loss calculation)
-            lbl_s1 = s1_labels[t]
-            lbl_s2 = s2_labels[t]
+            # Map emotion to integer ID
+            raw_emo = str(emotions[t]).lower().strip()
+            lbl = EMOTION_TO_IDX.get(raw_emo, -1)
             
             # ---------------------------------------------------
             # TEMPORAL ZERO-PADDING LOGIC (For N=3)
@@ -84,11 +106,10 @@ def build_conversational_sequences(metadata_path, window_size=3):
                 seq = [utterances[t-2], utterances[t-1], current_utt]
                 
             sequences.append(seq)
-            targets_stage1.append(lbl_s1)
-            targets_stage2.append(lbl_s2)
+            targets.append(lbl)
             
     print(f"[SUCCESS] Generated {len(sequences)} sequence windows.")
-    return sequences, targets_stage1, targets_stage2
+    return sequences, targets
 
 
 class IEMOCAPConversationalDataset(Dataset):
@@ -96,23 +117,21 @@ class IEMOCAPConversationalDataset(Dataset):
     Custom PyTorch Dataset for Conversational Emotion Tracking.
     Dynamically maps Utterance IDs to their corresponding 768-D acoustic embeddings.
     """
-    def __init__(self, metadata_path, embeddings_npy_path, target_stage=1):
+    def __init__(self, metadata_path, embeddings_npy_path):
         """
         Initializes the Dataset by loading the embedding dictionary and building sequence structures.
         
         Args:
             metadata_path (str): Path to iemocap_metadata.csv.
             embeddings_npy_path (str): Path to the static embeddings dictionary (.npy).
-            target_stage (int): 1 for Coarse Sentiment (3 classes), 2 for Fine-grained (5 classes).
         """
         super().__init__()
-        self.target_stage = target_stage
         
         print("[INFO] Loading 768-D acoustic embeddings into memory...")
         self.embeddings_dict = np.load(embeddings_npy_path, allow_pickle=True).item()
         
-        # Build logical sequences and labels
-        self.sequences, self.targets_s1, self.targets_s2 = build_conversational_sequences(metadata_path)
+        # Build logical sequences and flat 8-class labels
+        self.sequences, self.targets = build_conversational_sequences(metadata_path)
         
         # Define a zero-vector for padding missing historical contexts
         # Shape: (768,) matching the Wav2Vec2 output dimension
@@ -129,8 +148,8 @@ class IEMOCAPConversationalDataset(Dataset):
         # Retrieve the sequence of Utterance IDs (length 3)
         seq_utt_ids = self.sequences[idx]
         
-        # Select target label based on the requested hierarchical stage
-        target_label = self.targets_s1[idx] if self.target_stage == 1 else self.targets_s2[idx]
+        # Target label is directly fetched from the flat 8-class list
+        target_label = self.targets[idx]
         
         window_embeddings = []
         

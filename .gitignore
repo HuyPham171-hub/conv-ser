@@ -1,23 +1,29 @@
 # Python cache
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 
 # Virtual environments
-con.env/
 .venv/
-venv/
-ENV/
+env/
+.env
+.conda/
 
-# Large artifacts and datasets (root-level only)
-Data/
-Models/
-Results/
-Zip/
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
-# Jupyter
-.ipynb_checkpoints/
+# Heavy artifacts & raw results
+/data/
+/results/
+
+# Model checkpoints & weights
 checkpoints/
+*.pth
+*.pt
 
-# Keep everything inside src
-!src/
-!src/**
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/

@@ -34,8 +34,7 @@ os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 BATCH_SIZE = 64
 EPOCHS = 30
 LEARNING_RATE = 1e-4
-TARGET_STAGE = 2 # 1 for Sentiment (3 classes), 2 for Fine-Grained (5 classes)
-NUM_CLASSES = 3 if TARGET_STAGE == 1 else 5
+NUM_CLASSES = 8 # Flat 8-Class Classification
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Initializing Training Pipeline on: {device}")
@@ -90,6 +89,7 @@ def train_epoch(model, dataloader, criterion, optimizer):
         optimizer.step()
         
         total_loss += loss.item()
+        valid_batches += 1
         
     return total_loss / valid_batches if valid_batches > 0 else 0.0
 
@@ -130,7 +130,8 @@ def evaluate(model, dataloader, criterion):
     valid_targets = all_targets[valid_indices]
     
     acc = accuracy_score(valid_targets, valid_preds)
-    f1 = f1_score(valid_targets, valid_preds, average='macro')
+    # Explicitly set zero_division=0.0 to prevent NaN returns when a class is totally missed
+    f1 = f1_score(valid_targets, valid_preds, average='macro', zero_division=0.0)
     
     return total_loss / valid_batches if valid_batches > 0 else 0.0, acc, f1
 
@@ -138,8 +139,8 @@ def evaluate(model, dataloader, criterion):
 # 4. MAIN LOSO TRAINING LOOP
 # =====================================================================
 def run_loso_pipeline():
-    print(f"\n[INFO] Loading Dataset for Target Stage: {TARGET_STAGE}...")
-    full_dataset = IEMOCAPConversationalDataset(METADATA_CSV_PATH, EMBEDDINGS_PATH, target_stage=TARGET_STAGE)
+    print(f"\n[INFO] Loading Dataset for 8-Class Baseline...")
+    full_dataset = IEMOCAPConversationalDataset(METADATA_CSV_PATH, EMBEDDINGS_PATH)
     
     fold_f1_scores = []
     fold_acc_scores = []
@@ -176,8 +177,8 @@ def run_loso_pipeline():
             if val_f1 > best_f1:
                 best_f1 = val_f1
                 best_acc = val_acc
-                # Fixed: Dynamic filename based on target stage
-                torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, f"stage_{TARGET_STAGE}_best_model_fold_{test_session}.pth"))
+                # Save flat baseline model
+                torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, f"flat_8class_best_model_fold_{test_session}.pth"))
                 
         print(f"🎯 Fold {test_session} Best Results -> Acc: {best_acc:.4f} | F1: {best_f1:.4f}")
         fold_acc_scores.append(best_acc)
