@@ -10,7 +10,8 @@ import torch
 from torch.utils.data import Dataset
 import traceback
 
-def build_conversational_sequences(metadata_path, window_size=3):
+# modes: 'flat8': for 8 emotions; 'stage1': for 3 sentiments; 'stage2': for 4 negative emotions
+def build_conversational_sequences(metadata_path, window_size=3, mode='flat8'):
     """
     Reads metadata, groups utterances by Dialog_ID, and constructs 
     sliding window sequences with temporal zero-padding for initial turns.
@@ -49,27 +50,45 @@ def build_conversational_sequences(metadata_path, window_size=3):
     df = df.sort_values(by=['Session', 'Dialog_ID', 'Turn_Order']).reset_index(drop=True)
     
     # ---------------------------------------------------------
-    # EMOTION TO INDEX MAPPING (8 CLASSES)
-    # Merging 'exc' (Excitement) into 'hap' (Happiness) is a standard 
-    # academic practice for IEMOCAP due to their extreme acoustic overlap.
+    # DYNAMIC EMOTION TO INDEX MAPPING BASED ON EXPERIMENT MODE
+    # 'dis' (Disgust) is dropped due to severe class imbalance (only 2 samples).
     # Unmapped labels like 'xxx' or 'oth' default to -1 (ignored during training).
     # ---------------------------------------------------------
-    EMOTION_TO_IDX = {
-        'neu': 0,
-        'hap': 1,
-        'exc': 1, 
-        'sad': 2,
-        'ang': 3,
-        'fru': 4,
-        'fea': 5,
-        'sur': 6,
-        'dis': 7
-    }
-    
+    if mode == 'flat8':
+        # 7 Target Classes: Disgust removed, Happiness and Excitement kept separate
+        EMOTION_TO_IDX = {
+            'neu': 0,
+            'hap': 1,
+            'exc': 2, 
+            'sad': 3,
+            'ang': 4,
+            'fru': 5,
+            'fea': 6,
+            'sur': 7
+        }
+    elif mode == 'stage1':
+        # 3 Macro-Sentiment Classes (0: Positive, 1: Neutral/Other, 2: Negative)
+        EMOTION_TO_IDX = {
+            'hap': 0, 'exc': 0,
+            'neu': 1, 'sur': 1,
+            'ang': 2, 'sad': 2, 'fea': 2, 'fru': 2
+        }
+    elif mode == 'stage2':
+        # 4 Fine-grained Negative Classes (Disgust removed)
+        EMOTION_TO_IDX = {
+            'ang': 0,
+            'sad': 1,
+            'fea': 2,
+            'fru': 3
+        }
+    else:
+        raise ValueError("Invalid mode configuration. Choose among: 'flat8', 'stage1', 'stage2'")
+        
     sequences = []
     targets = []
     
-    print(f"[INFO] Applying sliding window mechanism (N={window_size}) across dialogues...")
+    print(f"[INFO] Applying sliding window (N={window_size}) for MODE: {mode.upper()}...")
+    
     
     # Group by independent conversational sessions to avoid context leakage across dialogues
     for dialog_id, group in df.groupby('Dialog_ID'):
@@ -117,7 +136,7 @@ class IEMOCAPConversationalDataset(Dataset):
     Custom PyTorch Dataset for Conversational Emotion Tracking.
     Dynamically maps Utterance IDs to their corresponding 768-D acoustic embeddings.
     """
-    def __init__(self, metadata_path, embeddings_npy_path):
+    def __init__(self, metadata_path, embeddings_npy_path, mode='flat8'):
         """
         Initializes the Dataset by loading the embedding dictionary and building sequence structures.
         
@@ -131,7 +150,7 @@ class IEMOCAPConversationalDataset(Dataset):
         self.embeddings_dict = np.load(embeddings_npy_path, allow_pickle=True).item()
         
         # Build logical sequences and flat 8-class labels
-        self.sequences, self.targets = build_conversational_sequences(metadata_path)
+        self.sequences, self.targets = build_conversational_sequences(metadata_path, mode=mode)
         
         # Define a zero-vector for padding missing historical contexts
         # Shape: (768,) matching the Wav2Vec2 output dimension

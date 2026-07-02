@@ -5,6 +5,7 @@ Implements Leave-One-Session-Out (LOSO) Cross-Validation and temporal masking.
 
 import os
 import sys
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
@@ -26,9 +27,21 @@ from src.models.bigru_stage3 import ConversationalBiGRU
 # =====================================================================
 EMBEDDINGS_PATH = r"d:\Resfes\Project\Ser\data\Embeddings\iemocap_static_embeddings_step1.npy"
 METADATA_CSV_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
-CHECKPOINT_DIR = r"d:\Resfes\Project\Ser\checkpoints\stage3_bigru"
 
+parser = argparse.ArgumentParser(description="Train Conversational Bi-GRU")
+parser.add_argument('--mode', type=str, choices=['flat8', 'stage1', 'stage2'], required=True, help="Experiment track")
+args = parser.parse_args()
+
+if args.mode == 'flat8':
+    NUM_CLASSES = 7
+elif args.mode == 'stage1':
+    NUM_CLASSES = 3
+elif args.mode == 'stage2':
+    NUM_CLASSES = 4
+
+CHECKPOINT_DIR = f"d:\\Resfes\\Project\\Ser\\checkpoints\\{args.mode}_bigru"
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
 
 # Training Hyperparameters
 BATCH_SIZE = 64
@@ -111,14 +124,20 @@ def evaluate(model, dataloader, criterion):
             
             logits = model(batch_X)
             loss = criterion(logits, batch_y)
+
+            if torch.isnan(loss):
+                continue
             total_loss += loss.item()
             valid_batches += 1
-            
+
             preds = torch.argmax(logits, dim=1)
             
             # Memory optimization: Append tensors directly
             all_preds.append(preds.detach())
             all_targets.append(batch_y)
+
+    if valid_batches == 0:
+        return 0.0, 0.0, 0.0
             
     # Concatenate tensors on GPU first, then transfer to CPU numpy arrays
     all_preds = torch.cat(all_preds).cpu().numpy()
@@ -139,8 +158,7 @@ def evaluate(model, dataloader, criterion):
 # 4. MAIN LOSO TRAINING LOOP
 # =====================================================================
 def run_loso_pipeline():
-    print(f"\n[INFO] Loading Dataset for 8-Class Baseline...")
-    full_dataset = IEMOCAPConversationalDataset(METADATA_CSV_PATH, EMBEDDINGS_PATH)
+    full_dataset = IEMOCAPConversationalDataset(METADATA_CSV_PATH, EMBEDDINGS_PATH, mode=args.mode)
     
     fold_f1_scores = []
     fold_acc_scores = []
@@ -178,7 +196,7 @@ def run_loso_pipeline():
                 best_f1 = val_f1
                 best_acc = val_acc
                 # Save flat baseline model
-                torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, f"flat_8class_best_model_fold_{test_session}.pth"))
+                torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, f"{args.mode}_best_model_fold_{test_session}.pth"))
                 
         print(f"🎯 Fold {test_session} Best Results -> Acc: {best_acc:.4f} | F1: {best_f1:.4f}")
         fold_acc_scores.append(best_acc)
