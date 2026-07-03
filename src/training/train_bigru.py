@@ -33,7 +33,7 @@ parser.add_argument('--mode', type=str, choices=['flat8', 'stage1', 'stage2'], r
 args = parser.parse_args()
 
 if args.mode == 'flat8':
-    NUM_CLASSES = 7
+    NUM_CLASSES = 8
 elif args.mode == 'stage1':
     NUM_CLASSES = 3
 elif args.mode == 'stage2':
@@ -47,7 +47,6 @@ os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 BATCH_SIZE = 64
 EPOCHS = 30
 LEARNING_RATE = 1e-4
-NUM_CLASSES = 8 # Flat 8-Class Classification
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Initializing Training Pipeline on: {device}")
