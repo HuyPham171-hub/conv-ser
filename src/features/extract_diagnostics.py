@@ -8,8 +8,8 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from src.data.iemocap_loader import IEMOCAPConversationalDataset
-from src.models.bigru_stage3 import ConversationalBiGRU
+from Ser.src.baselines.iemocap_loader import IEMOCAPConversationalDataset
+from Ser.src.baselines.bigru_stage3 import ConversationalBiGRU
 
 # 1. Paths
 EMBEDDINGS_PATH = r"d:\Resfes\Project\Ser\data\Embeddings\iemocap_static_embeddings_step1.npy"

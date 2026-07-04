@@ -19,13 +19,13 @@ if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 # Import custom dataset and model architectures
-from src.data.iemocap_loader import IEMOCAPConversationalDataset
-from src.models.bigru_stage3 import ConversationalBiGRU
+from src.baselines.iemocap_loader import IEMOCAPConversationalDataset
+from src.baselines.bigru_stage3 import ConversationalBiGRU
 
 # =====================================================================
 # 1. HYPERPARAMETERS & PATHS CONFIGURATION
 # =====================================================================
-EMBEDDINGS_PATH = r"d:\Resfes\Project\Ser\data\Embeddings\iemocap_static_embeddings_step1.npy"
+EMBEDDINGS_PATH = r"d:\Resfes\Project\Ser\data\Embeddings\iemocap_wav2vec2_embeddings.npy"
 METADATA_CSV_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
 
 parser = argparse.ArgumentParser(description="Train Conversational Bi-GRU")

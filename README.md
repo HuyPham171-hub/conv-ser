@@ -10,6 +10,7 @@ The repository is modularly organized into distinct pipelines:
 
 ### 1. `src/data/` (Data Preprocessing)
 * **`build_iemocap_metadata.py`**: Parses raw IEMOCAP text and transcription logs to generate the consolidated `iemocap_metadata.csv` (containing utterance IDs, emotion labels, and Session splits).
+* **`add_transcripts_to_metadata.py`**: Add transcript column into iemocap_metadata.csv
 * **`iemocap_loader.py`**: Implements the custom PyTorch `Dataset` and `DataLoader` classes. It dynamically adapts to three evaluation tracks (`flat8`, `stage1`, `stage2`) using custom mapping dictionaries while grouping sequences via a conversational sliding window.
 
 ### 2. `src/features/` (Feature Extraction)
