@@ -1,5 +1,12 @@
+"""
+Diagnostic Extraction Script
+Extracts Bi-GRU hidden states and predictions across 'flat8', 'stage1', and 'stage2' modes.
+Saves aligned results to a CSV file and compressed hidden states to a NumPy array for UMAP/t-SNE visualization.
+"""
+
 import torch
 import numpy as np
+import argparse
 import pandas as pd
 from torch.utils.data import DataLoader
 import sys
@@ -8,26 +15,51 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from Ser.src.baselines.iemocap_loader import IEMOCAPConversationalDataset
-from Ser.src.baselines.bigru_stage3 import ConversationalBiGRU
+from src.baselines.iemocap_loader import IEMOCAPConversationalDataset
+from src.baselines.bigru_stage3 import ConversationalBiGRU
 
-# 1. Paths
-EMBEDDINGS_PATH = r"d:\Resfes\Project\Ser\data\Embeddings\iemocap_static_embeddings_step1.npy"
+# =====================================================================
+# 1. PARAMETER PARSING & PATH CONFIGURATIONS
+# =====================================================================
+parser = argparse.ArgumentParser(description="Extract Diagnostics for Conversational Bi-GRU")
+parser.add_argument('--mode', type=str, choices=['flat8', 'stage1', 'stage2'], required=True, help="Experiment track")
+parser.add_argument('--fold', type=int, default=5, help="The specific fold checkpoint to load (1-5)")
+args = parser.parse_args()
+
+# set the number of classes based on the tracking mode
+if args.mode == 'flat8':
+    NUM_CLASSES = 8
+elif args.mode == 'stage1':
+    NUM_CLASSES = 3
+elif args.mode == 'stage2':
+    NUM_CLASSES = 4
+
+EMBEDDINGS_PATH = r"d:\Resfes\Project\Ser\data\Embeddings\iemocap_wav2vec2_embeddings.npy"
 METADATA_CSV_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
-CHECKPOINT_PATH = r"d:\Resfes\Project\Ser\checkpoints\stage3_bigru\flat_8class_best_model_fold_5.pth" # Pick your best fold
+CHECKPOINT_PATH = f"d:\\Resfes\\Project\\Ser\\checkpoints\\{args.mode}_bigru\\{args.mode}_best_model_fold_{args.fold}.pth"
 
-# 2. Setup
+if not os.path.exists(CHECKPOINT_PATH):
+    raise FileNotFoundError(f"Target model checkpoint does not exist at: {CHECKPOINT_PATH}")
+
+# =====================================================================
+# 2. DATASET & MODEL INITIALIZATION
+# =====================================================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# dataset = IEMOCAPConversationalDataset(METADATA_CSV_PATH, EMBEDDINGS_PATH, target_stage=1)
-dataset = IEMOCAPConversationalDataset(METADATA_CSV_PATH, EMBEDDINGS_PATH)
+print(f"[INFO] Initializing Evaluation Framework on: {device}")
+print(f"[INFO] Track Mode: {args.mode.upper()} | Target Checkpoint: Fold {args.fold}")
+
+
+dataset = IEMOCAPConversationalDataset(METADATA_CSV_PATH, EMBEDDINGS_PATH, mode=args.mode)
 dataloader = DataLoader(dataset, batch_size=64, shuffle=False) # MUST BE FALSE to keep order
 
 # model = ConversationalBiGRU(num_classes=3).to(device)
-model = ConversationalBiGRU(num_classes=8).to(device) #change num_class to 8 for flat8_classified
-model.load_state_dict(torch.load(CHECKPOINT_PATH))
+model = ConversationalBiGRU(num_classes=NUM_CLASSES).to(device) #change num_class to 8 for flat8_classified
+model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=device))
 model.eval()
 
-# 3. Extraction Arrays
+# =====================================================================
+# 3. EXTRACTION LOOP
+# =====================================================================
 all_preds = []
 all_targets = []
 all_hidden_states = []
@@ -45,11 +77,13 @@ with torch.no_grad():
         all_targets.extend(batch_y.cpu().numpy())
         all_hidden_states.append(hidden.cpu().numpy())
 
-# 4. FILTER AND SAVE TO DISK
 final_hidden_states = np.vstack(all_hidden_states) # Shape: (10039, 512)
 all_targets_arr = np.array(all_targets)            # Shape: (10039,)
 all_preds_arr = np.array(all_preds)                # Shape: (10039,)
 
+# =====================================================================
+# 4. TEMPORAL ALIGNMENT & FILTERING MASK
+# =====================================================================
 # Create a boolean mask to drop masked labels (-1)
 valid_mask = (all_targets_arr != -1)
 
@@ -57,22 +91,38 @@ valid_mask = (all_targets_arr != -1)
 filtered_hidden_states = final_hidden_states[valid_mask]
 filtered_targets = all_targets_arr[valid_mask]
 filtered_preds = all_preds_arr[valid_mask]
-# np.save(r"d:\Resfes\Project\Ser\data\Embeddings\bigru_hidden_states.npy", filtered_hidden_states)
-np.save(r"d:\Resfes\Project\Ser\data\Embeddings\flat8_bigru_hidden_states.npy", filtered_hidden_states)
 
+# =====================================================================
+# 5. EXPORT AND SERIALIZATION TO DISK
+# =====================================================================
+# Define dynamic output pathways based on the argument track mode
+npy_output_path = f"d:\\Resfes\Project\\Ser\\data\\Embeddings\\{args.mode}_bigru_hidden_states.npy"
+csv_output_path = f"d:\\Resfes\\Project\\Ser\\data\\DataFrames\\{args.mode}_evaluation_results.csv"
 
-# Save the perfectly aligned Predictions CSV
+# Save compressed hidden states for t-SNE or UMAP analysis
+np.save(npy_output_path, filtered_hidden_states)
+
+# Read base metadata, apply the exact same alignment mask, and inject classifications
 results_df = pd.read_csv(METADATA_CSV_PATH)
-# Apply the exact same mask to the dataframe to drop the -1 rows
-results_df = results_df[valid_mask].copy()
+# Critical Check: Ensure the mask length matches metadata rows. 
+# If metadata holds unmasked records (e.g. stage2 evaluation filtering), handle it via dataset indices.
+if len(results_df) != len(valid_mask):
+    print("[INFO] Metadata mismatch detected. Fetching exact indices mapped via the data loader...")
+    # Map back to the active indices processed within the sequential loop
+    valid_indices = [seq[-1] for idx, seq in enumerate(dataset.sequences) if valid_mask[idx]]
+    results_df = results_df[results_df['Utterance_ID'].isin(valid_indices)].copy()
+else:
+    results_df = results_df[valid_mask].copy()
 
 results_df['True_Label'] = filtered_targets
 results_df['Pred_Label'] = filtered_preds
 
-# results_df.to_csv(r"d:\Resfes\Project\Ser\data\DataFrames\evaluation_results.csv", index=False)
-results_df.to_csv(r"d:\Resfes\Project\Ser\data\DataFrames\flat8_evaluation_results.csv", index=False)
+results_df.to_csv(csv_output_path, index=False)
 
-
-print(f"[SUCCESS] Saved {len(filtered_targets)} valid samples.")
-print(f"-> Hidden states shape: {filtered_hidden_states.shape}")
-print(f"-> DataFrame length: {len(results_df)}")
+print(f"\n{'=' * 60}")
+print(f"🏆 DIAGNOSTIC EXTRACTION COMPLETED FOR: {args.mode.upper()}")
+print(f"\n{'=' * 60}")
+print(f"[SUCCESS] Extracted and aligned {len(results_df)} valid records.")
+print(f"-> Saved Hidden States (.npy) : {npy_output_path} (Shape: {filtered_hidden_states.shape})")
+print(f"-> Saved Evaluation Report (.csv): {csv_output_path}")
+print(f"\n{'=' * 60}")
