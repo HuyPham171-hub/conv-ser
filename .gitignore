@@ -1,29 +1,84 @@
-# Python cache
+# =========================
+# Python
+# =========================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
+# =========================
 # Virtual environments
+# =========================
 .venv/
+venv/
 env/
-.env
-.conda/
 
-# IDE & OS files
-.vscode/
-.idea/
+# =========================
+# Environment files
+# Commit examples only, never real local env files.
+# =========================
+.env
+*.env
+src/.env
+!.env.example
+!*.env.example
+!src/.env.example
+
+# =========================
+# Jupyter runtime files
+# Keep notebooks trackable; ignore only notebook runtime/cache files.
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Data, datasets, and generated features
+# =========================
+dataset/
+data/
+Data/
+Features/
+features/
+Zip/
+
+# =========================
+# Models, checkpoints, and ML outputs
+# =========================
+models/
+Models/
+checkpoints/
+results/
+Results/
+runs/
+wandb/
+mlruns/
+logs/
+
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+
+# Audio artifacts
+*.wav
+*.flac
+*.mp3
+
+# Generated reports / logs
+*.log
+*.tmp
+
+# =========================
+# OS / editor
+# =========================
 .DS_Store
 Thumbs.db
-
-# Heavy artifacts & raw results
-/data/
-/results/
-
-# Model checkpoints & weights
-checkpoints/
-*.pth
-*.pt
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
+desktop.ini
+.vscode/
+.idea/
