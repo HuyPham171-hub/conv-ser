@@ -2,13 +2,23 @@ import os
 import re
 import pandas as pd
 from pathlib import Path
+from dotenv import load_dotenv
 from tqdm import tqdm
 
 # =====================================================================
 # 1. PATH CONFIGURATION
 # =====================================================================
-IEMOCAP_ROOT_DIR = r"d:\Resfes\Project\IEMOCAP_full_release"
-OUTPUT_CSV_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ENV_PATH)
+
+IEMOCAP_ROOT_DIR = os.getenv("IEMOCAP_ROOT_DIR")
+if not IEMOCAP_ROOT_DIR:
+    raise ValueError(f"IEMOCAP_ROOT_DIR is not set in {ENV_PATH}")
+
+OUTPUT_CSV_PATH = os.getenv("OUTPUT_DIR")
+if not OUTPUT_CSV_PATH:
+    raise ValueError(f"OUTPUT_DIR is not set in {ENV_PATH}")
+OUTPUT_CSV_PATH = os.path.join(OUTPUT_CSV_PATH, "iemocap_metadata.csv")
 
 # Ensure the output directory exists
 os.makedirs(os.path.dirname(OUTPUT_CSV_PATH), exist_ok=True)

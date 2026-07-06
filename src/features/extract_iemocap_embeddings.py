@@ -5,50 +5,86 @@ import numpy as np
 import librosa
 from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, Wav2Vec2Config
 from tqdm import tqdm
+from dotenv import load_dotenv
 
 # =====================================================================
-# 1. ABSOLUTE PATH CONFIGURATION (Matches your specific structure)
+# 1. PATH CONFIGURATION
 # =====================================================================
-# Path to the raw IEMOCAP dataset
-IEMOCAP_ROOT_DIR = r"d:\Resfes\Project\IEMOCAP_full_release"
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ENV_PATH)
 
-# Path to save the extracted .npy file
-OUTPUT_DIR = r"d:\Resfes\Project\Ser\data\Embeddings"
+def get_required_path(env_name):
+    value = os.getenv(env_name)
+    if not value:
+        raise ValueError(f"{env_name} is not set in {ENV_PATH}")
 
-# Auto-create output directory if it doesn't exist
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+    return Path(value).expanduser()
+
+IEMOCAP_ROOT_DIR = get_required_path("IEMOCAP_ROOT_DIR")
+EMBEDDINGS_DIR = get_required_path("EMBEDDINGS_DIR")
+MODEL_DIR = get_required_path("WAV2VEC2_MODEL_DIR")
+
+if not IEMOCAP_ROOT_DIR.exists():
+    raise FileNotFoundError(f"IEMOCAP_ROOT_DIR does not exist: {IEMOCAP_ROOT_DIR}")
+
+if not MODEL_DIR.exists():
+    raise FileNotFoundError(f"WAV2VEC2_MODEL_DIR does not exist: {MODEL_DIR}")
+
+# Ensure the output directory exists
+EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # =====================================================================
 # 2. INITIALIZE BASE WAV2VEC2 MODEL
 # =====================================================================
-# Path to your local fine-tuned checkpoint directory
-MODEL_NAME = r"d:\Resfes\Project\Ser\checkpoints\wav2vec2_sentiment"
+requested_device = os.getenv("DEVICE", "auto").lower()
+if requested_device == "auto":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+elif requested_device == "cuda":
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "DEVICE=cuda was requested, but PyTorch cannot see a CUDA GPU. "
+            "Install a CUDA-enabled PyTorch build, then run this script again."
+        )
+    device = torch.device("cuda")
+elif requested_device == "cpu":
+    device = torch.device("cpu")
+else:
+    raise ValueError("DEVICE must be one of: auto, cuda, cpu")
 
-# Auto-detect compute device (Prioritize CUDA GPU for speed)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Using compute device: {device}")
-print(f"[INFO] Loading Fine-Tuned Wav2Vec2 model from: {MODEL_NAME}...")
+if device.type == "cuda":
+    print(f"[INFO] GPU detected: {torch.cuda.get_device_name(0)}")
+
+print(f"[INFO] Loading Fine-Tuned Wav2Vec2 model from: {MODEL_DIR}...")
 
 # Initialize the standalone feature extractor
-processor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_NAME)
+processor = Wav2Vec2FeatureExtractor.from_pretrained(str(MODEL_DIR), local_files_only=True)
 
 # Initialize an empty base model architecture using your local config layout
-config = Wav2Vec2Config.from_pretrained(MODEL_NAME)
+config_path = MODEL_DIR / "config.json"
+if config_path.exists():
+    config = Wav2Vec2Config.from_pretrained(str(MODEL_DIR), local_files_only=True)
+else:
+    print(f"[WARNING] No config.json found in {MODEL_DIR}; using default Wav2Vec2Config.")
+    config = Wav2Vec2Config()
+
 model = Wav2Vec2Model(config)
 
 # Detect weight file formats (Prioritize modern safetensors over legacy bin)
-safetensors_path = os.path.join(MODEL_NAME, "model.safetensors")
-bin_path = os.path.join(MODEL_NAME, "pytorch_model.bin")
+safetensors_path = MODEL_DIR / "model.safetensors"
+bin_path = MODEL_DIR / "pytorch_model.bin"
 
-if os.path.exists(safetensors_path):
+if safetensors_path.exists():
     from safetensors.torch import load_file
-    state_dict = load_file(safetensors_path)
+    state_dict = load_file(str(safetensors_path))
     print("[INFO] Found and loading model.safetensors")
-elif os.path.exists(bin_path):
-    state_dict = torch.load(bin_path, map_location="cpu")
+elif bin_path.exists():
+    state_dict = torch.load(str(bin_path), map_location="cpu")
     print("[INFO] Found and loading pytorch_model.bin")
 else:
-    raise FileNotFoundError(f"No valid weight files (model.safetensors or pytorch_model.bin) found in {MODEL_NAME}!")
+    raise FileNotFoundError(
+        f"No valid weight files (model.safetensors or pytorch_model.bin) found in {MODEL_DIR}!"
+    )
 
 # WEIGHT SURGERY: Strip custom wrapper prefixes to align with base Wav2Vec2Model keys
 new_state_dict = {}
@@ -126,7 +162,7 @@ def run_feature_extraction_pipeline():
     
     # Use rglob to scan through all Sessions (1 to 5)
     # Target exactly the .wav files inside the sentences/wav/ structure
-    wav_files = list(Path(IEMOCAP_ROOT_DIR).rglob("sentences/wav/*/*.wav"))
+    wav_files = list(IEMOCAP_ROOT_DIR.rglob("sentences/wav/*/*.wav"))
     
     total_files = len(wav_files)
     if total_files == 0:
@@ -154,7 +190,7 @@ def run_feature_extraction_pipeline():
             continue
 
     # Serialize the dictionary and save it to the hard drive as a .npy file
-    output_file_path = os.path.join(OUTPUT_DIR, "iemocap_static_embeddings_step1.npy")
+    output_file_path = EMBEDDINGS_DIR / "iemocap_static_embeddings_step1.npy"
     np.save(output_file_path, embedding_store)
     
     print("\n" + "="*60)
