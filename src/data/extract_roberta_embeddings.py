@@ -1,21 +1,50 @@
 import os
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
+from dotenv import load_dotenv
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
 # ==========================================
-METADATA_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
-OUTPUT_NPY_PATH = r"d:\Resfes\Project\Ser\data\Embeddings\iemocap_roberta_embeddings.npy"
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(ENV_PATH)
+
+def get_required_path(env_name):
+    """Fetches a directory path from the environment and expands user variables."""
+    value = os.getenv(env_name)
+    if not value:
+        raise ValueError(f"[ERROR] {env_name} is not set in {ENV_PATH}")
+    return Path(value).expanduser()
+
+# Dynamically build paths using environment variables
+DATAFRAMES_DIR = get_required_path("DATAFRAMES_DIR")
+EMBEDDINGS_DIR = get_required_path("EMBEDDINGS_DIR")
+
+# Define target file pathways matching your dynamic pipeline architecture
+METADATA_PATH = DATAFRAMES_DIR / "iemocap_metadata.csv"
+OUTPUT_NPY_PATH = EMBEDDINGS_DIR / "iemocap_roberta_embeddings.npy"
+
+# Ensure the output embeddings directory exists safely before running the pipeline
+EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL_NAME = "roberta-base"
 MAX_LENGTH = 128  # Standard length, sufficient for short dialogue utterances
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"[INFO] Utilizing device: {device}")
+requested_device = os.getenv("DEVICE", "auto").lower()
+if requested_device == "auto":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+elif requested_device == "cuda":
+    if not torch.cuda.is_available():
+        raise RuntimeError("[ERROR] DEVICE=cuda requested but PyTorch cannot see a GPU.")
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+print(f"[INFO] Utilizing compute device: {device}")
 
 # ==========================================
 # 2. MODEL INITIALIZATION

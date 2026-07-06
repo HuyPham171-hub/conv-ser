@@ -1,12 +1,27 @@
 import os
 import pandas as pd
-import glob
+from dotenv import load_dotenv
+from pathlib import Path
 
 # ==========================================
 # 1. PATH CONFIGURATION
 # ==========================================
-IEMOCAP_ROOT = r"D:\Resfes\Project\IEMOCAP_full_release"
-METADATA_CSV_PATH = r"d:\Resfes\Project\Ser\data\DataFrames\iemocap_metadata.csv"
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(ENV_PATH)
+
+def get_required_path(env_name):
+    """Fetches a directory path from the environment and expands user variables."""
+    value = os.getenv(env_name)
+    if not value:
+        raise ValueError(f"[ERROR] {env_name} is not set in {ENV_PATH}")
+    return Path(value).expanduser()
+
+IEMOCAP_ROOT_DIR = get_required_path("IEMOCAP_ROOT_DIR")
+DATAFRAMES_DIR = get_required_path("DATAFRAMES_DIR")
+
+# Define the absolute path to the target metadata CSV sheet
+METADATA_CSV_PATH = DATAFRAMES_DIR / "iemocap_metadata.csv"
+
 
 def extract_transcripts(iemocap_root):
     """
@@ -26,7 +41,7 @@ def extract_transcripts(iemocap_root):
             continue
             
         # Retrieve all .txt files in the directory
-        txt_files = glob.glob(os.path.join(transcriptions_dir, '*.txt'))
+        txt_files = list(transcriptions_dir.glob('*.txt'))
         
         for txt_file in txt_files:
             with open(txt_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -80,5 +95,5 @@ def merge_transcripts_to_csv(transcript_dict, csv_path):
     print(f"[INFO] 'Transcript' column appended successfully.")
 
 if __name__ == "__main__":
-    extracted_texts = extract_transcripts(IEMOCAP_ROOT)
+    extracted_texts = extract_transcripts(IEMOCAP_ROOT_DIR)
     merge_transcripts_to_csv(extracted_texts, METADATA_CSV_PATH)
