@@ -38,6 +38,18 @@ LOCAL_DIR = r"D:\Resfes\Project\iemocap_hf_upload"
 def upload_dataset():
     print(f"[INFO] Initializing connection to Hugging Face Hub...")
     print(f"[INFO] Target Repository: {REPO_ID}")
+
+    try:
+        api.delete_folder(
+            repo_id=REPO_ID,
+            repo_type="dataset",
+            path_in_rep="wav",  # Tên folder cần xóa trên Hub
+            token=TOKEN
+        )
+        print("[SUCCESS] Deleted old 'wav/' directory completely.")
+    except Exception as e:
+        print(f"[WARNING] Could not delete 'wav/' (It might already be deleted or empty): {e}")
+    
     print(f"[INFO] Source Directory: {LOCAL_DIR}")
     print(f"\n[INFO] Starting upload process (This may take some time depending on your bandwidth)...")
     
