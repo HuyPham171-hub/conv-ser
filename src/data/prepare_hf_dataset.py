@@ -65,8 +65,8 @@ def prepare_huggingface_dataset():
     # --- PHASE B: HUGGING FACE METADATA GENERATION ---
     print("\n[INFO] Generating Hugging Face compliant metadata.csv...")
     
-    # Create 'file_name' column formatted relatively for Hugging Face (e.g., wav/Ses01F_impro01_F000.wav)
-    filtered_df["file_name"] = filtered_df["Utterance_ID"].apply(lambda uid: f"wav/{uid}.wav")
+    # Create 'file_name' column formatted relatively for Hugging Face (e.g., Ses01F_impro01_F000.wav)
+    filtered_df["file_name"] = filtered_df["Utterance_ID"].apply(lambda uid: f"{uid}.wav")
     
     # Rename 'Emotion' to 'label' and map to numerical classes
     filtered_df["label"] = filtered_df["Raw_Emotion"].map(sentiment_map)
@@ -75,7 +75,7 @@ def prepare_huggingface_dataset():
     hf_df = filtered_df[["file_name", "label", "Utterance_ID", "Session"]]
     
     # Export to CSV without the index
-    hf_df.to_csv(TARGET_METADATA_PATH, index=False)
+    hf_df.to_csv(TARGET_METADATA_PATH, index=False, lineterminator='\n')
     
     print(f"[SUCCESS] Metadata successfully written to: {TARGET_METADATA_PATH}")
     print("\n[SUCCESS] Unified pipeline completed. The dataset is ready for Hugging Face upload!")

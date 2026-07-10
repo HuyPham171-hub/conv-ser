@@ -6,7 +6,6 @@ from huggingface_hub import HfApi
 # ==========================================
 # 1. ENVIRONMENT SETUP
 # ==========================================
-# Safely resolve the .env file path (Assuming script is in src/data/)
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(ENV_PATH)
 
@@ -19,17 +18,9 @@ def get_required_env(env_name):
 # ==========================================
 # 2. CONFIGURATION
 # ==========================================
-# Initialize the Hugging Face API client
 api = HfApi()
-
-# Retrieve the token securely from the environment variables
-# Make sure to add HF_TOKEN=your_token_here to your .env file
 TOKEN = get_required_env("HF_TOKEN")
-
-# Target repository on Hugging Face (Replace 'username' with your actual HF username)
 REPO_ID = "HuyPham171/iemocap-sentiment-clean"  
-
-# Local directory containing the prepared dataset (wav/ and metadata.csv)
 LOCAL_DIR = r"D:\Resfes\Project\iemocap_hf_upload" 
 
 # ==========================================
@@ -39,28 +30,37 @@ def upload_dataset():
     print(f"[INFO] Initializing connection to Hugging Face Hub...")
     print(f"[INFO] Target Repository: {REPO_ID}")
 
+    # --- PHASE 1: CLEAN UP OLD REPOSITORY ASSETS ---
+    # Since the new structure only requires metadata.csv and wav.zip, 
+    # we completely remove any legacy files or the old 'wav/' directory if they exist on the Hub.
+    items_to_delete = ["wav", "metadata.csv", "wav.zip"]
+    for item in items_to_delete:
+        try:
+            api.delete_file(
+                repo_id=REPO_ID,
+                repo_type="dataset",
+                path_in_repo=item,
+                token=TOKEN
+            )
+            print(f"[SUCCESS] Deleted old '{item}' from Hub.")
+        except Exception:
+            # Safely ignore if the file or folder does not exist
+            pass
+
+    # --- PHASE 2: UPLOAD NEW FLAT DATASTRUCTURE ---
+    print(f"\n[INFO] Source Directory: {LOCAL_DIR}")
+    print(f"[INFO] Starting upload process (Uploading metadata.csv and wav.zip)...")
+    
     try:
-        api.delete_folder(
+        api.upload_folder(
+            folder_path=LOCAL_DIR,
             repo_id=REPO_ID,
             repo_type="dataset",
-            path_in_rep="wav",  # Tên folder cần xóa trên Hub
-            token=TOKEN
+            token=TOKEN,
         )
-        print("[SUCCESS] Deleted old 'wav/' directory completely.")
+        print("\n[SUCCESS] All audio files and metadata have been uploaded perfectly!")
     except Exception as e:
-        print(f"[WARNING] Could not delete 'wav/' (It might already be deleted or empty): {e}")
-    
-    print(f"[INFO] Source Directory: {LOCAL_DIR}")
-    print(f"\n[INFO] Starting upload process (This may take some time depending on your bandwidth)...")
-    
-    api.upload_folder(
-        folder_path=LOCAL_DIR,
-        repo_id=REPO_ID,
-        repo_type="dataset",
-        token=TOKEN
-    )
-    
-    print("\n[SUCCESS] All audio files and metadata have been uploaded perfectly!")
+        print(f"\n[ERROR] Upload failed: {e}")
 
 if __name__ == "__main__":
     upload_dataset()
