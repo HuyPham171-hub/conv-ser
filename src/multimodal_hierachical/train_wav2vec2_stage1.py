@@ -41,7 +41,7 @@ if not HF_TOKEN:
 # True  = Vast.ai Testing (Hits HF Hub, subsamples for quick validation)
 # False = Full Cloud Training (Full LOSO Cross-Validation)
 # ------------------------------------------
-DUMMY_RUN = True  
+DUMMY_RUN = False  
 
 DATASET_REPO = "HuyPham171/iemocap-sentiment-clean"
 MODEL_ID = "facebook/wav2vec2-base"

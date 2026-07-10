@@ -71,8 +71,10 @@ def prepare_huggingface_dataset():
     # Rename 'Emotion' to 'label' and map to numerical classes
     filtered_df["label"] = filtered_df["Raw_Emotion"].map(sentiment_map)
     
-    # Keep only the essential columns to optimize metadata payload
-    hf_df = filtered_df[["file_name", "label", "Utterance_ID", "Session"]]
+    hf_df = filtered_df[["file_name", "label", "Utterance_ID", "Session"]].copy()
+    hf_df = hf_df.dropna(how='all')                  
+    hf_df = hf_df.dropna(subset=['file_name'])        
+    hf_df['file_name'] = hf_df['file_name'].astype(str)
     
     # Export to CSV without the index
     hf_df.to_csv(TARGET_METADATA_PATH, index=False, lineterminator='\n')
