@@ -3,7 +3,10 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 import json
 import gc
 import torch
+import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 from pathlib import Path
 from dotenv import load_dotenv
 from dataclasses import dataclass
@@ -14,15 +17,16 @@ from transformers import (
     AutoFeatureExtractor,
     Wav2Vec2ForSequenceClassification,
     TrainingArguments,
-    Trainer
+    Trainer,
+    EarlyStoppingCallback
 )
-from sklearn.metrics import accuracy_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, recall_score, f1_score, confusion_matrix
+from sklearn.utils.class_weight import compute_class_weight
 
 # ==========================================
 # 1. ENVIRONMENT & MLOPS CONFIGURATION
 # ==========================================
 def load_flexible_env():
-    """Robustly searches for .env file in current, parent, and grandparent directories."""
     current_dir = Path(__file__).resolve().parent
     for check_dir in [current_dir, current_dir.parent, current_dir.parent.parent]:
         env_file = check_dir / ".env"
@@ -36,11 +40,6 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 if not HF_TOKEN:
     raise ValueError(f"[ERROR] HF_TOKEN is not found in environment or .env file.")
 
-# ------------------------------------------
-# CRITICAL: DUMMY RUN TOGGLE
-# True  = Vast.ai Testing (Hits HF Hub, subsamples for quick validation)
-# False = Full Cloud Training (Full LOSO Cross-Validation)
-# ------------------------------------------
 DUMMY_RUN = False  
 
 DATASET_REPO = "HuyPham171/iemocap-sentiment-clean"
@@ -52,10 +51,26 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ==========================================
-# 2. METRICS COMPUTATION
+# 2. CUSTOM TRAINER FOR WEIGHTED LOSS
+# ==========================================
+class WeightedTrainer(Trainer):
+    def __init__(self, class_weights, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Chuyển class_weights vào GPU cùng với model
+        self.class_weights = torch.tensor(class_weights, dtype=torch.float32).to(self.args.device)
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+        loss_fct = nn.CrossEntropyLoss(weight=self.class_weights)
+        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+        return (loss, outputs) if return_outputs else loss
+
+# ==========================================
+# 3. METRICS & PLOTTING FUNCTIONS
 # ==========================================
 def compute_metrics(eval_pred):
-    """Computes Accuracy, Macro F1, and Unweighted Average Recall (UAR)."""
     predictions = np.argmax(eval_pred.predictions, axis=1)
     labels = eval_pred.label_ids
     
@@ -63,35 +78,56 @@ def compute_metrics(eval_pred):
     macro_f1 = f1_score(labels, predictions, average="macro")
     uar = recall_score(labels, predictions, average="macro")
     
-    return {
-        "accuracy": acc,
-        "macro_f1": macro_f1,
-        "uar": uar
-    }
+    return {"accuracy": acc, "macro_f1": macro_f1, "uar": uar}
+
+def plot_learning_curves(log_history, output_dir, fold):
+    train_loss = [x["loss"] for x in log_history if "loss" in x]
+    eval_loss = [x["eval_loss"] for x in log_history if "eval_loss" in x]
+    
+    # Bước nhảy xấp xỉ theo số epoch
+    epochs_train = [x["epoch"] for x in log_history if "loss" in x]
+    epochs_eval = [x["epoch"] for x in log_history if "eval_loss" in x]
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs_train, train_loss, label="Train Loss", marker="o")
+    plt.plot(epochs_eval, eval_loss, label="Validation Loss", marker="x")
+    plt.xlabel("Epochs")
+    plt.ylabel("Cross-Entropy Loss")
+    plt.title(f"Learning Curves - Fold {fold}")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(output_dir / "learning_curves.png")
+    plt.close()
+
+def plot_confusion_matrix_heatmap(labels, predictions, id2label, output_dir, fold):
+    cm = confusion_matrix(labels, predictions)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=[id2label[i] for i in range(len(id2label))],
+                yticklabels=[id2label[i] for i in range(len(id2label))])
+    plt.xlabel("Predicted Labels")
+    plt.ylabel("True Labels")
+    plt.title(f"Confusion Matrix - Fold {fold}")
+    plt.savefig(output_dir / "confusion_matrix.png")
+    plt.close()
 
 # ==========================================
-# 3. DATA COLLATOR FOR PADDING
+# 4. DATA COLLATOR
 # ==========================================
 @dataclass
 class DataCollatorAudioWithPadding:
-    """Dynamically pads the audio input sequences to the maximum length in a batch."""
     feature_extractor: AutoFeatureExtractor
     padding: Union[bool, str] = True
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         input_features = [{"input_values": feature["input_values"]} for feature in features]
         label_features = [feature["label"] for feature in features]
-
-        batch = self.feature_extractor.pad(
-            input_features,
-            padding=self.padding,
-            return_tensors="pt",
-        )
+        batch = self.feature_extractor.pad(input_features, padding=self.padding, return_tensors="pt")
         batch["labels"] = torch.tensor(label_features, dtype=torch.long)
         return batch
 
 # ==========================================
-# 4. MAIN TRAINING PIPELINE (LOSO CV)
+# 5. MAIN TRAINING PIPELINE (LOSO CV)
 # ==========================================
 def main():
     print(f"[INFO] Initializing Cloud Training Pipeline...")
@@ -103,12 +139,8 @@ def main():
     id2label = {0: "Negative", 1: "Neutral", 2: "Positive"}
     
     config = AutoConfig.from_pretrained(
-        MODEL_ID,
-        num_labels=3,
-        label2id=label2id,
-        id2label=id2label,
-        finetuning_task="audio-classification",
-        token=HF_TOKEN
+        MODEL_ID, num_labels=3, label2id=label2id, id2label=id2label,
+        finetuning_task="audio-classification", token=HF_TOKEN
     )
     
     print(f"[INFO] Connecting to Hugging Face Hub to load: {DATASET_REPO}")
@@ -121,19 +153,13 @@ def main():
     def preprocess_function(batch):
         audio_arrays = [x["array"] for x in batch["audio"]]
         inputs = feature_extractor(
-            audio_arrays,
-            sampling_rate=feature_extractor.sampling_rate,
-            truncation=True,
-            max_length=16000 * 15  # Capped at 15 seconds to cover >98% of IEMOCAP durations safely
+            audio_arrays, sampling_rate=feature_extractor.sampling_rate,
+            truncation=True, max_length=16000 * 15 
         )
         return inputs
 
-    # Track metrics across all 5 folds
     fold_results = []
     
-    # -----------------------------------------------------------------
-    # 5-FOLD LEAVE-ONE-SESSION-OUT (LOSO) CROSS-VALIDATION LOOP
-    # -----------------------------------------------------------------
     for test_session in range(1, 6):
         print(f"\n{'='*50}")
         print(f"[INFO] STARTING FOLD {test_session} (Test Session: {test_session})")
@@ -143,9 +169,18 @@ def main():
         eval_ds  = dataset["train"].filter(lambda x: x["Session"] == test_session)
         
         if DUMMY_RUN:
-            print("[WARNING] Subsampling fold data for Dummy Run...")
             train_ds = train_ds.select(range(40))
             eval_ds = eval_ds.select(range(10))
+
+        # Tính toán Class Weights động cho Fold hiện tại
+        print("[INFO] Computing dynamic class weights to handle imbalance...")
+        train_labels = train_ds["label"]
+        class_weights = compute_class_weight(
+            class_weight="balanced", 
+            classes=np.unique(train_labels), 
+            y=train_labels
+        )
+        print(f"[INFO] Applied Class Weights: {class_weights}")
 
         print("[INFO] Extracting raw audio arrays into Wav2Vec2 input vectors...")
         train_remove_cols = [col for col in train_ds.column_names if col != "label"]
@@ -154,17 +189,13 @@ def main():
         train_encoded = train_ds.map(preprocess_function, remove_columns=train_remove_cols, batched=True, batch_size=4)
         eval_encoded  = eval_ds.map(preprocess_function, remove_columns=eval_remove_cols, batched=True, batch_size=4)
 
-        # Re-initialize model inside the loop to reset weights for each fold
         model = Wav2Vec2ForSequenceClassification.from_pretrained(
-            MODEL_ID,
-            config=config,
-            ignore_mismatched_sizes=True,
-            token=HF_TOKEN
+            MODEL_ID, config=config, ignore_mismatched_sizes=True, token=HF_TOKEN
         )
         model.freeze_feature_encoder()
 
         fold_output_dir = OUTPUT_DIR / f"fold_{test_session}"
-        epochs = 1 if DUMMY_RUN else 5
+        epochs = 1 if DUMMY_RUN else 15
         
         training_args = TrainingArguments(
             output_dir=str(fold_output_dir),
@@ -185,21 +216,33 @@ def main():
             dataloader_num_workers=4 if not DUMMY_RUN else 0, 
         )
 
-        trainer = Trainer(
+        trainer = WeightedTrainer(
+            class_weights=class_weights,
             model=model,
             args=training_args,
             train_dataset=train_encoded,
             eval_dataset=eval_encoded,
             processing_class=feature_extractor,
             data_collator=DataCollatorAudioWithPadding(feature_extractor=feature_extractor),
-            compute_metrics=compute_metrics
+            compute_metrics=compute_metrics,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=3)] # Early Stopping kích hoạt
         )
 
         print(f"[INFO] Training Fold {test_session}...")
         trainer.train()
         
+        print(f"[INFO] Plotting Learning Curves...")
+        plot_learning_curves(trainer.state.log_history, fold_output_dir, test_session)
+
         print(f"[INFO] Evaluating optimal model for Fold {test_session}...")
         eval_metrics = trainer.evaluate()
+        
+        print(f"[INFO] Generating Confusion Matrix...")
+        predictions_output = trainer.predict(eval_encoded)
+        predicted_labels = np.argmax(predictions_output.predictions, axis=1)
+        true_labels = predictions_output.label_ids
+        plot_confusion_matrix_heatmap(true_labels, predicted_labels, id2label, fold_output_dir, test_session)
+
         print(f"[RESULT] Fold {test_session} Metrics: {eval_metrics}")
         
         fold_results.append({
@@ -209,13 +252,11 @@ def main():
             "accuracy": eval_metrics["eval_accuracy"]
         })
         
-        # Free GPU memory before starting the next fold to prevent OOM
         del model, trainer, train_encoded, eval_encoded
         gc.collect()
         torch.cuda.empty_cache()
         
         if DUMMY_RUN and test_session == 2:
-            print("[INFO] Dummy Run mode limits execution to 2 folds. Exiting loop.")
             break
 
     # -----------------------------------------------------------------

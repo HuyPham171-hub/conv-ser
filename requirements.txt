@@ -9,3 +9,6 @@ soundfile==0.14.0
 librosa==0.11.0
 python-dotenv
 hf_transfer
+matplotlib
+seaborn
+scikit-learn
