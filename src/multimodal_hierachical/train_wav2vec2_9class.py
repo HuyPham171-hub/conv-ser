@@ -59,21 +59,45 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ==========================================
 # 2. CUSTOM TRAINER FOR WEIGHTED LOSS
 # ==========================================
-class WeightedTrainer(Trainer):
-    """
-    Custom Trainer that injects class weights into the CrossEntropyLoss function 
-    to handle the severe class imbalance in IEMOCAP 9-class data.
-    """
-    def __init__(self, class_weights, *args, **kwargs):
+# class WeightedTrainer(Trainer):
+#     """
+#     Custom Trainer that injects class weights into the CrossEntropyLoss function 
+#     to handle the severe class imbalance in IEMOCAP 9-class data.
+#     """
+#     def __init__(self, class_weights, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         self.class_weights = torch.tensor(class_weights, dtype=torch.float32).to(self.args.device)
+
+#     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+#         labels = inputs.pop("labels")
+#         outputs = model(**inputs)
+#         logits = outputs.get("logits")
+#         loss_fct = nn.CrossEntropyLoss(weight=self.class_weights)
+#         loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+#         return (loss, outputs) if return_outputs else loss
+
+class FocalLossTrainer(Trainer):
+    def __init__(self, class_weights, gamma=2.0, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.class_weights = torch.tensor(class_weights, dtype=torch.float32).to(self.args.device)
+        self.gamma = gamma
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.get("logits")
-        loss_fct = nn.CrossEntropyLoss(weight=self.class_weights)
-        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+        
+        # Calculate standard cross entropy without reduction
+        ce_loss_fct = nn.CrossEntropyLoss(weight=self.class_weights, reduction='none')
+        ce_loss = ce_loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+        
+        # Calculate pt (probability of correct class)
+        pt = torch.exp(-ce_loss)
+        
+        # Compute focal loss extension
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        loss = focal_loss.mean()
+        
         return (loss, outputs) if return_outputs else loss
 
 # ==========================================
@@ -103,7 +127,7 @@ def plot_learning_curves(log_history, output_dir, fold):
     plt.plot(epochs_train, train_loss, label="Train Loss", marker="o", color='#1f77b4')
     plt.plot(epochs_eval, eval_loss, label="Validation Loss", marker="x", color='#d62728', linestyle='--')
     plt.xlabel("Epochs")
-    plt.ylabel("Cross-Entropy Loss")
+    plt.ylabel("Focal Loss")
     plt.title(f"Wav2Vec2 Learning Curves - Fold {fold}")
     plt.legend()
     plt.grid(True, linestyle=':', alpha=0.7)
@@ -255,8 +279,9 @@ def main():
             report_to="none" 
         )
 
-        trainer = WeightedTrainer(
+        trainer = FocalLossTrainer(
             class_weights=full_weights,
+            gamma=2.0,
             model=model,
             args=training_args,
             train_dataset=train_encoded,
