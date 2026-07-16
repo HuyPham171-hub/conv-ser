@@ -1,5 +1,5 @@
 import os
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
 import json
 import gc
 import torch
@@ -42,7 +42,8 @@ if not HF_TOKEN:
 
 DUMMY_RUN = False  
 
-DATASET_REPO = "HuyPham171/iemocap-sentiment-clean"
+DATASET_CLEAN_REPO = "HuyPham171/iemocap-sentiment-clean"
+DATASET_RESCUED_REPO = "HuyPham171/iemocap-sentiment-rescued"
 MODEL_ID = "facebook/wav2vec2-base"
 
 OUTPUT_DIR = Path("./checkpoints/wav2vec2_stage1").resolve()
@@ -143,12 +144,19 @@ def main():
         finetuning_task="audio-classification", token=HF_TOKEN
     )
     
-    print(f"[INFO] Connecting to Hugging Face Hub to load: {DATASET_REPO}")
-    dataset = load_dataset(DATASET_REPO, token=HF_TOKEN)
+    print(f"[INFO] Streaming clean datasets from: {DATASET_CLEAN_REPO}")
+    clean_dataset = load_dataset(DATASET_CLEAN_REPO, token=HF_TOKEN)
+
+    print(f"[INFO] Streaming rescued datasets from: {DATASET_RESCUED_REPO}")
+    rescued_dataset = load_dataset(DATASET_RESCUED_REPO, token=HF_TOKEN)
     
-    if "audio" not in dataset["train"].column_names:
-        dataset = dataset.rename_column("file_name", "audio")
-    dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
+    if "audio" not in clean_dataset["train"].column_names:
+        clean_dataset = clean_dataset.rename_column("file_name", "audio")
+    clean_dataset = clean_dataset.cast_column("audio", Audio(sampling_rate=16000))
+
+    if "audio" not in rescued_dataset["train"].column_names:
+        rescued_dataset = rescued_dataset.rename_column("file_name", "audio")
+    rescued_dataset = rescued_dataset.cast_column("audio", Audio(sampling_rate=16000))
 
     def preprocess_function(batch):
         audio_arrays = [x["array"] for x in batch["audio"]]
@@ -165,8 +173,8 @@ def main():
         print(f"[INFO] STARTING FOLD {test_session} (Test Session: {test_session})")
         print(f"{'='*50}")
         
-        train_ds = dataset["train"].filter(lambda x: x["Session"] != test_session)
-        eval_ds  = dataset["train"].filter(lambda x: x["Session"] == test_session)
+        train_ds = clean_dataset["train"].filter(lambda x: x["Session"] != test_session)
+        eval_ds  = clean_dataset["train"].filter(lambda x: x["Session"] == test_session)
         
         if DUMMY_RUN:
             train_ds = train_ds.select(range(40))
@@ -237,11 +245,30 @@ def main():
         print(f"[INFO] Evaluating optimal model for Fold {test_session}...")
         eval_metrics = trainer.evaluate()
         
+        # ==========================================
+        # SAVE MODEL & TRAINER STATE
+        # ==========================================
+        print(f"[INFO] Saving best model and trainer state for Fold {test_session}...")
+        best_model_path = fold_output_dir / "best_model"
+        trainer.save_model(str(best_model_path))
+        
         print(f"[INFO] Generating Confusion Matrix...")
         predictions_output = trainer.predict(eval_encoded)
         predicted_labels = np.argmax(predictions_output.predictions, axis=1)
         true_labels = predictions_output.label_ids
         plot_confusion_matrix_heatmap(true_labels, predicted_labels, id2label, fold_output_dir, test_session)
+
+        # -----------------------------------------------------------------
+        # DYNAMIC CLEANUP BLOCK: Purge intermediate heavy checkpoints
+        # -----------------------------------------------------------------
+        import shutil
+        print(f"[INFO] Fold {test_session} finished. Purging intermediate checkpoints to save cloud disk space...")
+        # Scan and destroy all temporary directories prefixed with "checkpoint-*"
+        for checkpoint_dir in fold_output_dir.glob("checkpoint-*"):
+            if checkpoint_dir.is_dir():
+                shutil.rmtree(checkpoint_dir)
+        print(f"[SUCCESS] Cleaned up intermediate checkpoints for Fold {test_session}.")
+        # -----------------------------------------------------------------
 
         print(f"[RESULT] Fold {test_session} Metrics: {eval_metrics}")
         

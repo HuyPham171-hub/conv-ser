@@ -24,7 +24,7 @@ login(token=TOKEN)
 # 2. FLEXIBLE TASK CONFIGURATION
 # ==========================================
 # Toggle between "EMOTION" and "SENTIMENT" depending on your target upload
-TASK = "EMOTION"  # Change to "SENTIMENT" if you ever need to re-upload the other one
+TASK = "SENTIMENT"  # Change to "SENTIMENT" if you ever need to re-upload the other one
 
 LOCAL_BASE_DIR = r"D:\Resfes\Project\iemocap_hf_upload"
 CSV_PATH = os.path.join(LOCAL_BASE_DIR, "metadata.csv")

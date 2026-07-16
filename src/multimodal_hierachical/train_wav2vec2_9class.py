@@ -1,6 +1,6 @@
 import os
 # Enable fast transfers for Hugging Face Hub (crucial for Vast.ai cloud instances)
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
 import json
 import gc
 import torch
