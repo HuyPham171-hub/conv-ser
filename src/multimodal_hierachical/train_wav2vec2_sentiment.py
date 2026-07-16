@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import Dict, List, Union
-from datasets import load_dataset, Audio
+from datasets import load_dataset, Audio, concatenate_datasets
 from transformers import (
     AutoConfig,
     AutoFeatureExtractor,
@@ -46,7 +46,7 @@ DATASET_CLEAN_REPO = "HuyPham171/iemocap-sentiment-clean"
 DATASET_RESCUED_REPO = "HuyPham171/iemocap-sentiment-rescued"
 MODEL_ID = "facebook/wav2vec2-base"
 
-OUTPUT_DIR = Path("./checkpoints/wav2vec2_stage1").resolve()
+OUTPUT_DIR = Path("./checkpoints/wav2vec2_sentiment").resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -76,8 +76,8 @@ def compute_metrics(eval_pred):
     labels = eval_pred.label_ids
     
     acc = accuracy_score(labels, predictions)
-    macro_f1 = f1_score(labels, predictions, average="macro")
-    uar = recall_score(labels, predictions, average="macro")
+    macro_f1 = f1_score(labels, predictions, average="macro", zero_division=0)
+    uar = recall_score(labels, predictions, average="macro", zero_division=0)
     
     return {"accuracy": acc, "macro_f1": macro_f1, "uar": uar}
 
@@ -173,8 +173,12 @@ def main():
         print(f"[INFO] STARTING FOLD {test_session} (Test Session: {test_session})")
         print(f"{'='*50}")
         
-        train_ds = clean_dataset["train"].filter(lambda x: x["Session"] != test_session)
+        train_clean = clean_dataset["train"].filter(lambda x: x["Session"] != test_session)
         eval_ds  = clean_dataset["train"].filter(lambda x: x["Session"] == test_session)
+
+        train_rescued = rescued_dataset["train"].filter(lambda x: x["Session"] != test_session)
+
+        train_ds = concatenate_datasets([train_clean, train_rescued]).shuffle(seed=42)
         
         if DUMMY_RUN:
             train_ds = train_ds.select(range(40))
@@ -209,6 +213,7 @@ def main():
             output_dir=str(fold_output_dir),
             eval_strategy="epoch",
             save_strategy="epoch",
+            save_total_limit=2,
             learning_rate=3e-5,
             per_device_train_batch_size=4,
             gradient_accumulation_steps=4,
