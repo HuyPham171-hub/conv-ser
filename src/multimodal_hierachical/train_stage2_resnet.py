@@ -19,7 +19,7 @@ from sklearn.utils.class_weight import compute_class_weight
 from data_loaders.stage2_multimodal_loader import DualBandResNetDataset, dualband_pad_collate_fn
 
 # ==========================================
-# 1. HARDCODED CLOUD PATH CONFIGURATION (NO .ENV)
+# 1. HARDCODED CLOUD PATH CONFIGURATION
 # ==========================================
 BASE_CLOUD_DIR = Path("/workspace/conv-ser")
 DUALBAND_DIR = BASE_CLOUD_DIR / "data" / "Visual" / "DualBand_Spectrograms"
@@ -32,7 +32,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ==========================================
-# 2. AUTO-DOWNLOAD & EXTRACT DATASETS FROM HF HUB
+# 2. AUTO-DOWNLOAD & EXTRACT DATASETS
 # ==========================================
 def ensure_cloud_assets_exist(hf_token: str):
     if not (DUALBAND_DIR.exists() and any(DUALBAND_DIR.glob("*.pt"))):
@@ -62,10 +62,10 @@ def ensure_cloud_assets_exist(hf_token: str):
             with tarfile.open(tar_file_s1, "r") as tar:
                 tar.extractall(path=STAGE1_OUTPUTS_DIR)
             tar_file_s1.unlink()
-    print("[SUCCESS] All cloud assets are successfully synchronized and ready for training.")
+    print("[SUCCESS] All cloud assets are successfully synchronized.")
 
 # ==========================================
-# 3. MODIFIED RESNET ARCHITECTURE (DUAL-BAND)
+# 3. MODIFIED RESNET ARCHITECTURE (REGULARIZED)
 # ==========================================
 class ModifiedDualBandResNet(nn.Module):
     def __init__(self, num_classes=5):
@@ -75,6 +75,7 @@ class ModifiedDualBandResNet(nn.Module):
         old_weights = base_model.conv1.weight.data
         self.conv1.weight.data[:, 0, :, :] = old_weights.mean(dim=1)
         self.conv1.weight.data[:, 1, :, :] = old_weights.mean(dim=1)
+        
         self.bn1 = base_model.bn1
         self.relu = base_model.relu
         self.maxpool = base_model.maxpool
@@ -83,6 +84,9 @@ class ModifiedDualBandResNet(nn.Module):
         self.layer3 = base_model.layer3
         self.layer4 = base_model.layer4
         self.avgpool = base_model.avgpool
+        
+        # Heavy regularization before classification
+        self.dropout = nn.Dropout(p=0.5)
         self.fc = nn.Linear(512, num_classes)
         
     def forward(self, x):
@@ -95,8 +99,12 @@ class ModifiedDualBandResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
+        
+        # Extract V_resnet before dropout for Stage 3 intact representation
         v_resnet = torch.flatten(x, 1) 
-        logits = self.fc(v_resnet)
+        
+        v_dropped = self.dropout(v_resnet)
+        logits = self.fc(v_dropped)
         return logits, v_resnet
 
 # ==========================================
@@ -148,40 +156,31 @@ def plot_confusion_matrix_heatmap(labels, predictions, fold_dir, fold):
     plt.close()
 
 # ==========================================
-# 5. ENGINE CORE: RUN TRAINING PIPELINE
+# 5. ENGINE CORE
 # ==========================================
 def main():
     print("[INFO] Initializing Stage 2: Dual-Branch ResNet & Soft Gating Pipeline...")
-    
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
-        raise ValueError("[ERROR] Valid HF_TOKEN must be provided to fetch cloud data. Set it via 'export HF_TOKEN=\"your_token\"'.")
+        raise ValueError("[ERROR] Valid HF_TOKEN must be provided.")
         
     ensure_cloud_assets_exist(hf_token)
     clean_df = pd.read_csv(CLEAN_CSV)
     rescued_df = pd.read_csv(RESCUED_CSV)
     
-    # -----------------------------------------------------------------
-    # IMPROVEMENT 1: Recursive Glob for Robust Stage 1 Loading
-    # -----------------------------------------------------------------
-    print("[INFO] Aggregating Stage 1 outputs across all folds to build global mapping...")
+    print("[INFO] Aggregating Stage 1 outputs across all folds...")
     stage1_outputs = {}
     for fold_idx in range(1, 6):
         target_filename = f"stage1_outputs_fold_{fold_idx}.pt"
         matched_files = list(STAGE1_OUTPUTS_DIR.rglob(target_filename))
-        
         if matched_files:
             fold_data = torch.load(matched_files[0], weights_only=True)
             stage1_outputs.update(fold_data)
-            print(f"  -> Loaded {len(fold_data)} items from {target_filename}")
-        else:
-            print(f"  -> [WARNING] {target_filename} is completely missing in {STAGE1_OUTPUTS_DIR}!")
             
     if not stage1_outputs:
         raise FileNotFoundError(f"[ERROR] No Stage 1 checkpoint files found in {STAGE1_OUTPUTS_DIR}.")
     
-    print(f"[SUCCESS] Global Stage 1 mapping established with {len(stage1_outputs)} total items.")
-
+    print(f"[SUCCESS] Global Stage 1 mapping established with {len(stage1_outputs)} items.")
     fold_results = []
     
     for test_session in range(1, 6):
@@ -194,22 +193,10 @@ def main():
         train_metadata = pd.concat([train_clean, train_rescued]).sample(frac=1, random_state=42)
         eval_metadata = eval_clean.copy()
         
-        # -----------------------------------------------------------------
-        # IMPROVEMENT 2: Safeguard Intersection (Prevents KeyError)
-        # -----------------------------------------------------------------
+        # Intersection filtering
         valid_stage1_keys = set(stage1_outputs.keys())
-        original_train_len = len(train_metadata)
-        
         train_metadata = train_metadata[train_metadata['Utterance_ID'].isin(valid_stage1_keys)].copy()
         eval_metadata = eval_metadata[eval_metadata['Utterance_ID'].isin(valid_stage1_keys)].copy()
-        
-        dropped_samples = original_train_len - len(train_metadata)
-        if dropped_samples > 0:
-            print(f"[WARNING] Dropped {dropped_samples} training samples because they are missing from Stage 1 outputs.")
-            
-        if len(train_metadata) == 0:
-            raise ValueError(f"[ERROR] Fold {test_session} training data is completely empty after intersection.")
-        # -----------------------------------------------------------------
         
         train_dataset = DualBandResNetDataset(train_metadata, DUALBAND_DIR, stage1_outputs, is_train=True)
         eval_dataset = DualBandResNetDataset(eval_metadata, DUALBAND_DIR, stage1_outputs, is_train=False)
@@ -222,14 +209,18 @@ def main():
         train_mapped_series = train_metadata['Raw_Emotion'].astype(str).str.lower().map(fine_grained_map)
         valid_train_labels = train_mapped_series[train_mapped_series.notna() & (train_mapped_series != -1)].astype(int).values
 
-        if len(valid_train_labels) == 0:
-            raise ValueError(f"[ERROR] Fold {test_session} contains no valid negative fine-grained labels in its training split.")
-
         class_weights = compute_class_weight("balanced", classes=np.unique(valid_train_labels), y=valid_train_labels)
         loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(class_weights, dtype=torch.float32).to(DEVICE), ignore_index=-1)
         
         model = ModifiedDualBandResNet(num_classes=5).to(DEVICE)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=0.01)
+        
+        # Freeze lower layers to prevent overfitting
+        for name, param in model.named_parameters():
+            if "layer3" not in name and "layer4" not in name and "fc" not in name and "conv1" not in name:
+                param.requires_grad = False
+                
+        # Lower LR, Higher Weight Decay applied only to trainable parameters
+        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5, weight_decay=0.05)
         
         fold_dir = OUTPUT_DIR / f"fold_{test_session}"
         fold_dir.mkdir(parents=True, exist_ok=True)
@@ -304,39 +295,50 @@ def main():
                 
         plot_curves(train_loss_history, val_loss_history, val_uar_history, fold_dir, test_session)
         
+        # ==========================================
+        # FINAL VERIFICATION & EXTRACTION
+        # ==========================================
         model.load_state_dict(torch.load(fold_dir / "best_model.pt"))
         model.eval()
         
+        # 1. Extract tensors using the FULL dataset for downstream Stage 3
         print(f"[INFO] Extracting Soft Gated Tensors (V_gated) for ENTIRE Fold {test_session}...")
         full_metadata = pd.concat([train_metadata, eval_metadata]).drop_duplicates(subset=['Utterance_ID'])
         full_dataset = DualBandResNetDataset(full_metadata, DUALBAND_DIR, stage1_outputs, is_train=False)
         full_loader = DataLoader(full_dataset, batch_size=16, shuffle=False, num_workers=num_workers_cfg, collate_fn=dualband_pad_collate_fn)
 
         fold_stage2_outputs = {}
-        final_preds, final_labels = [], []
-
         with torch.no_grad():
             for batch in full_loader:
                 utt_ids = batch["utt_ids"]
                 specs = batch["spectrograms"].to(DEVICE)
                 p_negs = batch["p_negs"].to(DEVICE)
-                labels = batch["labels"].to(DEVICE)
-
-                logits, v_resnet = model(specs)
+                
+                _, v_resnet = model(specs)
                 v_gated = v_resnet * p_negs.unsqueeze(1)
                 
-                final_preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
-                final_labels.extend(labels.cpu().numpy())
-
                 for i, uid in enumerate(utt_ids):
                     fold_stage2_outputs[uid] = {"v_gated": v_gated[i].cpu()}
 
         torch.save(fold_stage2_outputs, fold_dir / f"stage2_outputs_fold_{test_session}.pt")
         print(f"[SUCCESS] Saved V_gated Tensors for Stage 3.")
         
-        plot_confusion_matrix_heatmap(np.array(final_labels), np.array(final_preds), fold_dir, test_session)
-        eval_metrics = compute_masked_metrics(np.array(final_labels), np.array(final_preds))
-        print(f"[RESULT] Fold {test_session} Negative-UAR: {eval_metrics['uar']:.4f}")
+        # 2. Pure Validation Reporting (Data Leakage Fix)
+        print(f"[INFO] Calculating pure validation metrics for Fold {test_session}...")
+        eval_final_preds, eval_final_labels = [], []
+        with torch.no_grad():
+            for batch in eval_loader:
+                specs = batch["spectrograms"].to(DEVICE)
+                labels = batch["labels"].to(DEVICE)
+                logits, _ = model(specs)
+                
+                preds = torch.argmax(logits, dim=1).cpu().numpy()
+                eval_final_preds.extend(preds)
+                eval_final_labels.extend(labels.cpu().numpy())
+
+        plot_confusion_matrix_heatmap(np.array(eval_final_labels), np.array(eval_final_preds), fold_dir, test_session)
+        eval_metrics = compute_masked_metrics(np.array(eval_final_labels), np.array(eval_final_preds))
+        print(f"[RESULT] Fold {test_session} True Validation Negative-UAR: {eval_metrics['uar']:.4f}")
         
         fold_results.append({
             "fold": test_session, "uar": eval_metrics["uar"],
@@ -347,7 +349,7 @@ def main():
         gc.collect()
         torch.cuda.empty_cache()
 
-    print(f"\n{'='*60}\n[SUCCESS] STAGE 2 (DUAL-BAND RESNET) 5-FOLD RUN COMPLETED\n{'='*60}")
+    print(f"\n{'='*60}\n[SUCCESS] STAGE 2 5-FOLD RUN COMPLETED\n{'='*60}")
     uars = [r["uar"] for r in fold_results]
     print(f"Final Aggregated Negative-UAR Metrics Score: {np.mean(uars):.4f} ± {np.std(uars):.4f}")
     
