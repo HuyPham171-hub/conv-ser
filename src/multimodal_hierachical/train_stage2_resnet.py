@@ -79,6 +79,14 @@ def ensure_cloud_assets_exist(hf_token: str):
             token=hf_token,
             max_workers=4
         )
+
+        tar_file_s1 = STAGE1_OUTPUTS_DIR / "stage1_checkpoints.tar"
+        if tar_file_s1.exists():
+            print(f"[INFO] Extracting {tar_file_s1.name} to {STAGE1_OUTPUTS_DIR}...")
+            with tarfile.open(tar_file_s1, "r") as tar:
+                tar.extractall(path=STAGE1_OUTPUTS_DIR)
+            print("[SUCCESS] Stage 1 extraction complete. Deleting .tar archive.")
+            tar_file_s1.unlink()
     print("[SUCCESS] All cloud assets are successfully synchronized and ready for training.")
 
 # ==========================================
