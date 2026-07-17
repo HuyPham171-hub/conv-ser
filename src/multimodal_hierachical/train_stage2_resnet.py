@@ -215,16 +215,22 @@ def main():
     clean_df = pd.read_csv(CLEAN_CSV)
     rescued_df = pd.read_csv(RESCUED_CSV)
     
+    # Build a global mapping of P_neg from all Stage 1 folds to cover the entire dataset.
+    print("[INFO] Aggregating Stage 1 outputs across all folds to build global mapping...")
+    stage1_outputs = {}
+    for fold_idx in range(1, 6):
+        fold_file = STAGE1_OUTPUTS_DIR / f"fold_{fold_idx}" / f"stage1_outputs_fold_{fold_idx}.pt"
+        if fold_file.exists():
+            fold_data = torch.load(fold_file, weights_only=True)
+            stage1_outputs.update(fold_data)
+            
+    if not stage1_outputs:
+        raise FileNotFoundError(f"[ERROR] No Stage 1 checkpoint files found in {STAGE1_OUTPUTS_DIR}.")
+
     fold_results = []
     
     for test_session in range(1, 6):
         print(f"\n{'='*60}\n[INFO] STARTING RESNET FOLD {test_session}\n{'='*60}")
-        
-        # Load Stage 1 Outputs for this specific Fold to access P_neg
-        stage1_output_file = STAGE1_OUTPUTS_DIR / f"fold_{test_session}" / f"stage1_outputs_fold_{test_session}.pt"
-        if not stage1_output_file.exists():
-            raise FileNotFoundError(f"[ERROR] Stage 1 outputs not found at {stage1_output_file}")
-        stage1_outputs = torch.load(stage1_output_file, weights_only=True)
         
         train_clean = clean_df[clean_df["Session"] != test_session]
         eval_clean = clean_df[clean_df["Session"] == test_session]
@@ -242,8 +248,13 @@ def main():
         train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=num_workers_cfg, collate_fn=dualband_pad_collate_fn)
         eval_loader = DataLoader(eval_dataset, batch_size=16, shuffle=False, num_workers=num_workers_cfg, collate_fn=dualband_pad_collate_fn)
         
-        # Extract exclusively valid negative labels to compute Class Weights
-        valid_train_labels = [train_dataset[i]['label'].item() for i in range(len(train_dataset)) if train_dataset[i]['label'].item() != -1]
+        fine_grained_map = {'ang': 0, 'sad': 1, 'fru': 2, 'dis': 3, 'fea': 4}
+        train_mapped_series = train_metadata['Raw_Emotion'].astype(str).str.lower().map(fine_grained_map)
+        valid_train_labels = train_mapped_series[train_mapped_series.notna() & (train_mapped_series != -1)].astype(int).values
+
+        if len(valid_train_labels) == 0:
+            raise ValueError(f"[ERROR] Fold {test_session} contains no valid negative fine-grained labels in its training split.")
+
         class_weights = compute_class_weight("balanced", classes=np.unique(valid_train_labels), y=valid_train_labels)
         
         # Masked Loss: Automatically bypass gradients for Label = -1
@@ -377,7 +388,7 @@ def main():
             "accuracy": eval_metrics["accuracy"]
         })
         
-        del model, optimizer, stage1_outputs
+        del model, optimizer
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -387,6 +398,9 @@ def main():
     
     with open(OUTPUT_DIR / "stage2_summary_report.json", "w") as f:
         json.dump(fold_results, f, indent=4)
+
+    del stage1_outputs
+    gc.collect()
 
 if __name__ == "__main__":
     main()
