@@ -69,7 +69,7 @@ def ensure_cloud_assets_exist(hf_token: str):
             tar_file.unlink() # Delete the archive to free up 2.5GB of disk space
         
     # 2. Download Stage 1 checkpoints
-    if not (STAGE1_OUTPUTS_DIR.exists() and any(STAGE1_OUTPUTS_DIR.iterdir())):
+    if not (STAGE1_OUTPUTS_DIR.exists() and any(STAGE1_OUTPUTS_DIR.glob("**/*.pt"))):
         print(f"[INFO] Stage 1 checkpoints missing. Downloading from HF Hub...")
         STAGE1_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
         snapshot_download(
@@ -248,6 +248,7 @@ def main():
         train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=num_workers_cfg, collate_fn=dualband_pad_collate_fn)
         eval_loader = DataLoader(eval_dataset, batch_size=16, shuffle=False, num_workers=num_workers_cfg, collate_fn=dualband_pad_collate_fn)
         
+        # Vectorized label mapping using Pandas to prevent I/O load time penalties
         fine_grained_map = {'ang': 0, 'sad': 1, 'fru': 2, 'dis': 3, 'fea': 4}
         train_mapped_series = train_metadata['Raw_Emotion'].astype(str).str.lower().map(fine_grained_map)
         valid_train_labels = train_mapped_series[train_mapped_series.notna() & (train_mapped_series != -1)].astype(int).values
@@ -255,6 +256,7 @@ def main():
         if len(valid_train_labels) == 0:
             raise ValueError(f"[ERROR] Fold {test_session} contains no valid negative fine-grained labels in its training split.")
 
+        # Compute dynamic class weights to handle imbalance across target negative classes
         class_weights = compute_class_weight("balanced", classes=np.unique(valid_train_labels), y=valid_train_labels)
         
         # Masked Loss: Automatically bypass gradients for Label = -1
@@ -388,6 +390,7 @@ def main():
             "accuracy": eval_metrics["accuracy"]
         })
         
+        # Clean up fold specific variables to release GPU resources
         del model, optimizer
         gc.collect()
         torch.cuda.empty_cache()
@@ -399,6 +402,7 @@ def main():
     with open(OUTPUT_DIR / "stage2_summary_report.json", "w") as f:
         json.dump(fold_results, f, indent=4)
 
+    # Clean up global mappings at the very end of execution
     del stage1_outputs
     gc.collect()
 
