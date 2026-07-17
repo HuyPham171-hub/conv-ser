@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
 import pandas as pd
-import numpy as np
 import torch
+if not hasattr(torch, "float8_e8m0fnu"):
+    torch.float8_e8m0fnu = torch.float32
 from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 from dotenv import load_dotenv
@@ -25,8 +26,9 @@ DATAFRAMES_DIR = get_required_path("DATAFRAMES_DIR")
 EMBEDDINGS_DIR = get_required_path("EMBEDDINGS_DIR")
 
 # Define target file pathways matching your dynamic pipeline architecture
-METADATA_PATH = DATAFRAMES_DIR / "iemocap_metadata.csv"
-OUTPUT_NPY_PATH = EMBEDDINGS_DIR / "iemocap_roberta_embeddings.npy"
+# Note: Ensure this CSV contains ALL utterances (including xxx/oth) for Stage 3 temporal modeling
+METADATA_PATH = DATAFRAMES_DIR / "iemocap_metadata.csv" 
+OUTPUT_PT_PATH = EMBEDDINGS_DIR / "lexical_embeddings.pt"
 
 # Ensure the output embeddings directory exists safely before running the pipeline
 EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +75,7 @@ def extract_lexical_features():
     
     embeddings_dict = {}
     
-    print(f"[INFO] Extracting 768-D semantic vectors for {len(df)} utterances...")
+    print(f"[INFO] Extracting 768-D semantic PyTorch tensors for {len(df)} utterances...")
     
     with torch.no_grad():
         for index, row in tqdm(df.iterrows(), total=len(df)):
@@ -94,14 +96,14 @@ def extract_lexical_features():
             
             # Extract the [CLS] token representation (index 0 of the sequence)
             # Shape: (1, seq_len, 768) -> (768,)
-            cls_embedding = outputs.last_hidden_state[0, 0, :].cpu().numpy()
+            # Kept as a PyTorch Tensor and moved to CPU memory
+            cls_embedding = outputs.last_hidden_state[0, 0, :].cpu()
             
             embeddings_dict[utt_id] = cls_embedding
             
-    # Save to disk
-    os.makedirs(os.path.dirname(OUTPUT_NPY_PATH), exist_ok=True)
-    np.save(OUTPUT_NPY_PATH, embeddings_dict)
-    print(f"[SUCCESS] Saved {len(embeddings_dict)} RoBERTa embeddings to {OUTPUT_NPY_PATH}")
+    # Save directly as a PyTorch serialized dictionary
+    torch.save(embeddings_dict, OUTPUT_PT_PATH)
+    print(f"[SUCCESS] Saved {len(embeddings_dict)} RoBERTa tensors to {OUTPUT_PT_PATH}")
 
 if __name__ == "__main__":
     extract_lexical_features()

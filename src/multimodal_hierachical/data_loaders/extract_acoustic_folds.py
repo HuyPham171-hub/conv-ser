@@ -2,58 +2,54 @@ import os
 import sys
 import gc
 import torch
+if not hasattr(torch, "float8_e8m0fnu"):
+    torch.float8_e8m0fnu = torch.float32
 import librosa
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from pathlib import Path
 from transformers import AutoFeatureExtractor, Wav2Vec2Model
+from dotenv import load_dotenv
 
 # ==========================================
-# 1. DYNAMIC PATH RESOLUTION & IMPORTS
+# 1. DYNAMIC PATH RESOLUTION & CONFIGURATION
 # ==========================================
-# Fix: Force python to recognize the project root directory
-# __file__ is: src/multimodal_hierachical/data_loaders/extract_acoustic_folds.py
+ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(ENV_PATH)
+
+def get_required_path(env_name):
+    """Fetches a directory path from the environment and expands user variables."""
+    value = os.getenv(env_name)
+    if not value:
+        raise ValueError(f"[ERROR] {env_name} is not set in {ENV_PATH}")
+    return Path(value).expanduser()
+
+# Dynamically build paths using environment variables
+DATAFRAMES_DIR = get_required_path("DATAFRAMES_DIR")
+EMBEDDINGS_DIR = get_required_path("EMBEDDINGS_DIR")
+CHECKPOINTS_BASE_DIR = get_required_path("CHECKPOINTS_DIR")
+IEMOCAP_ROOT_DIR = get_required_path("IEMOCAP_ROOT_DIR")
+
+# Define target file pathways
+# Note: Đảm bảo file này chứa toàn bộ các Utterance cần thiết (bao gồm cả xxx/oth nếu Stage 3 cần)
+METADATA_PATH = DATAFRAMES_DIR / "iemocap_metadata.csv"
+CHECKPOINT_DIR = CHECKPOINTS_BASE_DIR / "wav2vec2_sentiment"
+
 CURRENT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CURRENT_DIR.parents[2] # Navigates up to D:\Resfes\Project\Ser
+PROJECT_ROOT = CURRENT_DIR.parents[3] # Navigates up to D:\Resfes\Project\Ser
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Force path resolution for the inner src directory if needed
-SRC_DIR = PROJECT_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-# Safe Import using absolute package path resolved via sys.path injection
-try:
-    from multimodal_hierachical.utils.checkpoint_discovery import get_best_checkpoint
-except ImportError:
-    try:
-        # Fallback for systems where 'src' folder acts as root directly
-        from src.multimodal_hierachical.utils.checkpoint_discovery import get_best_checkpoint
-    except ImportError as e:
-        raise ImportError(
-            f"[ERROR] Failed to import 'get_best_checkpoint'. Base exception: {str(e)}. "
-            f"Ensure checkpoint_discovery.py contains 'def get_best_checkpoint' "
-            f"and is located correctly."
-        )
-
 # Target compute device initialization
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Define absolute/relative data directories based on PROJECT_ROOT
-DATA_DIR = PROJECT_ROOT / "data"
-IEMOCAP_ROOT = DATA_DIR / "IEMOCAP_full_release"
-CLEAN_METADATA_PATH = DATA_DIR / "DataFrames" / "iemocap_metadata_clean.csv"
-
 # Define base architecture and checkpoint path configs
 BASE_MODEL_ID = "facebook/wav2vec2-base"
-CHECKPOINTS_ROOT = PROJECT_ROOT / "checkpoints" / "wav2vec2_stage1"
 
 # Target directory for the generated acoustic embeddings
-OUTPUT_DIR = PROJECT_ROOT / "data" / "Embeddings" / "Acoustic"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True) # Automatically create the directory if it does not exist
+OUTPUT_DIR = EMBEDDINGS_DIR / "Acoustic"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==========================================
 # 2. AUDIO PATH RECONSTRUCTION
@@ -61,10 +57,10 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True) # Automatically create the directo
 def build_audio_path(row: pd.Series) -> Path:
     """
     Reconstructs the absolute physical path to the .wav file using metadata.
-    Format: IEMOCAP_ROOT/SessionX/sentences/wav/Dialog_ID/Utterance_ID.wav
+    Format: IEMOCAP_ROOT_DIR/SessionX/sentences/wav/Dialog_ID/Utterance_ID.wav
     """
     session_folder = f"Session{row['Session']}"
-    return IEMOCAP_ROOT / session_folder / "sentences" / "wav" / str(row['Dialog_ID']) / f"{row['Utterance_ID']}.wav"
+    return IEMOCAP_ROOT_DIR / session_folder / "sentences" / "wav" / str(row['Dialog_ID']) / f"{row['Utterance_ID']}.wav"
 
 # ==========================================
 # 3. CORE EXTRACTION PIPELINE
@@ -73,15 +69,15 @@ def main():
     print(f"[INFO] Initializing Fold-Aware Acoustic Extraction...")
     print(f"[INFO] Target Compute Device: {DEVICE}")
     
-    if not CLEAN_METADATA_PATH.exists():
-        raise FileNotFoundError(f"[ERROR] Clean metadata not found at: {CLEAN_METADATA_PATH}")
+    if not METADATA_PATH.exists():
+        raise FileNotFoundError(f"[ERROR] Metadata not found at: {METADATA_PATH}")
 
     # Load ground truth metadata
-    df = pd.read_csv(CLEAN_METADATA_PATH)
+    df = pd.read_csv(METADATA_PATH)
     total_utterances = len(df)
-    print(f"[INFO] Loaded Ground Truth Metadata: {total_utterances} clean utterances.")
+    print(f"[INFO] Loaded Metadata: {total_utterances} utterances.")
 
-    # Initialize the static feature extractor (No weights, just audio preprocessing rules)
+    # Initialize the static feature extractor
     processor = AutoFeatureExtractor.from_pretrained(BASE_MODEL_ID)
 
     # ---------------------------------------------------------
@@ -92,30 +88,22 @@ def main():
         print(f"🚀 STARTING EXTRACTION FOR FOLD {fold}")
         print(f"{'='*60}")
 
-        fold_dir = CHECKPOINTS_ROOT / f"fold_{fold}"
-        if not fold_dir.exists():
-            print(f"[WARNING] Skipping Fold {fold}. Directory not found: {fold_dir}")
-            continue
-
-        # Utilize the Auto-Discovery module to fetch the optimal weights
-        best_checkpoint_path = get_best_checkpoint(fold_dir, metric_key="eval_uar", greater_is_better=True)
-        if not best_checkpoint_path:
-            print(f"[ERROR] Could not resolve best checkpoint for Fold {fold}. Skipping.")
+        # Trỏ trực tiếp vào thư mục best_model đã được lưu sạch sẽ từ quá trình Train
+        best_checkpoint_path = CHECKPOINT_DIR / f"fold_{fold}" / "best_model"
+        
+        if not best_checkpoint_path.exists():
+            print(f"[WARNING] Skipping Fold {fold}. Best model directory not found: {best_checkpoint_path}")
             continue
             
-        print(f"[INFO] Injecting optimal weights from: {best_checkpoint_path.name}")
+        print(f"[INFO] Injecting optimal weights from: {best_checkpoint_path}")
 
         # Load the base model architecture and inject fine-tuned weights
-        # We use Wav2Vec2Model instead of ForSequenceClassification to get raw hidden states
         model = Wav2Vec2Model.from_pretrained(best_checkpoint_path).to(DEVICE)
         model.eval() # Freeze computation graph
 
         # Dictionary to hold the {utterance_id: 768-D tensor} mapping
         fold_embeddings = {}
 
-        # Iterate through the entire dataset
-        # Note: We extract ALL files per fold. In the Multimodal stage, Fold 1 will use 
-        # fold_1.pt embeddings to ensure its Test Set was processed by an unbiased model.
         for index, row in tqdm(df.iterrows(), total=total_utterances, desc=f"Processing Fold {fold}"):
             utt_id = str(row['Utterance_ID'])
             audio_path = build_audio_path(row)
@@ -134,12 +122,9 @@ def main():
 
                 # 3. Forward pass without gradient calculation to save VRAM
                 with torch.no_grad():
-                    # output_hidden_states=True is default in Wav2Vec2Model, 
-                    # last_hidden_state shape: (batch_size=1, sequence_length, hidden_size=768)
                     outputs = model(input_values)
                 
                 # 4. Apply Temporal Mean Pooling (Compress sequence_length -> 1D Vector)
-                # Shape becomes: (768,)
                 pooled_embedding = torch.mean(outputs.last_hidden_state, dim=1).squeeze(0).cpu()
                 
                 fold_embeddings[utt_id] = pooled_embedding
