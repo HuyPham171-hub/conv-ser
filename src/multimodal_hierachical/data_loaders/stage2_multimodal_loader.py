@@ -54,45 +54,18 @@ class DualBandResNetDataset(Dataset):
         
         # Read from RAM Cache or Load from Disk
         if utt_id in self.cache:
-            spectrogram_2c = self.cache[utt_id]
+            spectrogram = self.cache[utt_id]
         else:
             spec_path = self.spec_dir / f"{utt_id}.pt"
-            spectrogram_2c = torch.load(spec_path, weights_only=True)
-            self.cache[utt_id] = spectrogram_2c
+            spectrogram = torch.load(spec_path, weights_only=True)
+            self.cache[utt_id] = spectrogram
         
         # Clone tensor to avoid corrupting the cached original data in RAM
-        spectrogram_2c = spectrogram_2c.clone().float()
-        
-        # =========================================================
-        # DYNAMIC 3RD CHANNEL EXTRACTION (DELTA-DELTA) ON-THE-FLY
-        # =========================================================
-        # 1. Generate mono spectrogram by averaging Low-pass and High-pass channels
-        # Shape transition: (2, N_MELS, Time) -> (1, N_MELS, Time)
-        mono_spec = spectrogram_2c.mean(dim=0, keepdim=True)
-        
-        # 2. Compute Delta (1st derivative) and Delta-Delta (2nd derivative)
-        # Uses torchaudio.functional.compute_deltas (default win_length=5)
-        delta = AF.compute_deltas(mono_spec)
-        delta_delta = AF.compute_deltas(delta)
-
-        # 2.5 Normalize Delta-Delta channel to match the scale (mean 0, std 1) of the existing static channels
-        dd_mean = delta_delta.mean()
-        dd_std = delta_delta.std()
-        delta_delta = (delta_delta - dd_mean) / (dd_std + 1e-6) # 1e-6 prevents division by zero
-        
-        # 3. Concatenate to form a standard 3-channel RGB-like tensor: [Low, High, Delta-Delta]
-        # Resulting Shape: (3, N_MELS, Time)
-        spectrogram_3c = torch.cat([spectrogram_2c, delta_delta], dim=0)
-        # =========================================================
-
-        # Apply SpecAugment data augmentation across all 3 channels during training
-        if self.is_train:
-            spectrogram_3c = self.freq_masking(spectrogram_3c)
-            spectrogram_3c = self.time_masking(spectrogram_3c)
+        spectrogram = spectrogram.clone().float()
         
         return {
             "utt_id": utt_id,
-            "spectrogram": spectrogram_3c,
+            "spectrogram": spectrogram,
             "p_neg": p_neg.detach().clone().float(),
             "label": torch.tensor(label, dtype=torch.long)
         }
