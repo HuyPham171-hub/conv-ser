@@ -47,7 +47,7 @@ def ensure_cloud_assets_exist(hf_token: str):
         if tar_file.exists():
             print(f"[INFO] Extracting {tar_file.name} to {DUALBAND_DIR}...")
             with tarfile.open(tar_file, "r") as tar:
-                tar.extractall(path=DUALBAND_DIR)
+                tar.extractall(path=DUALBAND_DIR, filter='data')
             tar_file.unlink()
         
     if not (STAGE1_OUTPUTS_DIR.exists() and any(STAGE1_OUTPUTS_DIR.glob("**/*.pt"))):
@@ -268,8 +268,8 @@ def main():
                 param.requires_grad = False
                 
         # Lower LR, Higher Weight Decay applied only to trainable parameters
-        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5, weight_decay=0.05)
-        
+        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-2)
+
         fold_dir = OUTPUT_DIR / f"fold_{test_session}"
         fold_dir.mkdir(parents=True, exist_ok=True)
         
@@ -293,6 +293,7 @@ def main():
                 
                 if not torch.isnan(loss) and loss.item() > 0:
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     optimizer.step()
                     total_train_loss += loss.item()
                     valid_train_batches += 1

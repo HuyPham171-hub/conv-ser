@@ -74,6 +74,11 @@ class DualBandResNetDataset(Dataset):
         # Uses torchaudio.functional.compute_deltas (default win_length=5)
         delta = AF.compute_deltas(mono_spec)
         delta_delta = AF.compute_deltas(delta)
+
+        # 2.5 Normalize Delta-Delta channel to match the scale (mean 0, std 1) of the existing static channels
+        dd_mean = delta_delta.mean()
+        dd_std = delta_delta.std()
+        delta_delta = (delta_delta - dd_mean) / (dd_std + 1e-6) # 1e-6 prevents division by zero
         
         # 3. Concatenate to form a standard 3-channel RGB-like tensor: [Low, High, Delta-Delta]
         # Resulting Shape: (3, N_MELS, Time)
@@ -88,7 +93,7 @@ class DualBandResNetDataset(Dataset):
         return {
             "utt_id": utt_id,
             "spectrogram": spectrogram_3c,
-            "p_neg": torch.tensor(p_neg, dtype=torch.float32),
+            "p_neg": p_neg.detach().clone().float(),
             "label": torch.tensor(label, dtype=torch.long)
         }
 
