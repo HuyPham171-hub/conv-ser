@@ -352,9 +352,9 @@ def main():
                         
                     preds = torch.argmax(logits, dim=-1)
                     
-                    all_preds.extend(preds.cpu().numpy())
-                    all_labels.extend(labels.cpu().numpy())
-                    all_masks.extend(valid_masks.cpu().numpy())
+                    all_preds.extend(preds.cpu().numpy().flatten())
+                    all_labels.extend(labels.cpu().numpy().flatten())
+                    all_masks.extend(valid_masks.cpu().numpy().flatten())
                     
             avg_val_loss = total_val_loss / max(1, valid_val_batches)
             val_losses.append(avg_val_loss)
