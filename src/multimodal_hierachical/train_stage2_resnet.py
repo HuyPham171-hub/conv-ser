@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import torch.nn.functional as F
 from pathlib import Path
 from huggingface_hub import snapshot_download
 from torch.utils.data import DataLoader
@@ -71,11 +72,10 @@ class ModifiedDualBandResNet(nn.Module):
     def __init__(self, num_classes=5):
         super().__init__()
         base_model = resnet18(weights=ResNet18_Weights.DEFAULT)
-        self.conv1 = nn.Conv2d(2, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        old_weights = base_model.conv1.weight.data
-        self.conv1.weight.data[:, 0, :, :] = old_weights.mean(dim=1)
-        self.conv1.weight.data[:, 1, :, :] = old_weights.mean(dim=1)
         
+        # Use the native 3-channel conv1 from the pre-trained ImageNet model
+        # since our DataLoader now stacks [Low-pass, High-pass, Delta-Delta]
+        self.conv1 = base_model.conv1
         self.bn1 = base_model.bn1
         self.relu = base_model.relu
         self.maxpool = base_model.maxpool
@@ -85,7 +85,7 @@ class ModifiedDualBandResNet(nn.Module):
         self.layer4 = base_model.layer4
         self.avgpool = base_model.avgpool
         
-        # Heavy regularization before classification
+        # Heavy regularization before classification to prevent overfitting
         self.dropout = nn.Dropout(p=0.5)
         self.fc = nn.Linear(512, num_classes)
         
@@ -156,6 +156,53 @@ def plot_confusion_matrix_heatmap(labels, predictions, fold_dir, fold):
     plt.close()
 
 # ==========================================
+# CUSTOM LOSS FUNCTION: FOCAL LOSS
+# ==========================================
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma=2.0, ignore_index=-1, reduction='mean'):
+        """
+        Focal Loss for addressing class imbalance in fine-grained emotion classification.
+        It dynamically scales the cross-entropy loss based on prediction confidence.
+        
+        Args:
+            weight (Tensor, optional): A manual rescaling weight given to each class (Alpha).
+            gamma (float): The focusing parameter to penalize easy examples. Default is 2.0.
+            ignore_index (int): Specifies a target value that is ignored and does not contribute to the loss.
+            reduction (str): Specifies the reduction to apply to the output ('none', 'mean', 'sum').
+        """
+        super(FocalLoss, self).__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # Compute the standard Cross-Entropy Loss with no reduction to get individual sample losses.
+        # F.cross_entropy natively handles ignore_index by outputting 0.0 for those specific targets.
+        ce_loss = F.cross_entropy(inputs, targets, weight=self.weight, ignore_index=self.ignore_index, reduction='none')
+        
+        # Calculate the probability of the ground-truth class (pt).
+        # Since ce_loss = -log(pt), we can get pt by taking exp(-ce_loss).
+        # For ignored indices, ce_loss is 0, so pt is 1, which zeroes out the focal factor later.
+        pt = torch.exp(-ce_loss)
+        
+        # Apply the Focal Loss formula: FL(pt) = (1 - pt)^gamma * CE(pt)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        
+        # Apply the chosen reduction method over the valid (non-ignored) elements
+        if self.reduction == 'mean':
+            valid_mask = (targets != self.ignore_index).float()
+            valid_count = valid_mask.sum()
+            if valid_count > 0:
+                return focal_loss.sum() / valid_count
+            else:
+                return focal_loss.sum()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+# ==========================================
 # 5. ENGINE CORE
 # ==========================================
 def main():
@@ -210,8 +257,9 @@ def main():
         valid_train_labels = train_mapped_series[train_mapped_series.notna() & (train_mapped_series != -1)].astype(int).values
 
         class_weights = compute_class_weight("balanced", classes=np.unique(valid_train_labels), y=valid_train_labels)
-        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(class_weights, dtype=torch.float32).to(DEVICE), ignore_index=-1)
-        
+        # loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(class_weights, dtype=torch.float32).to(DEVICE), ignore_index=-1)
+        loss_fn = FocalLoss(weight=torch.tensor(class_weights, dtype=torch.float32).to(DEVICE), gamma=2.0, ignore_index=-1)
+
         model = ModifiedDualBandResNet(num_classes=5).to(DEVICE)
         
         # Freeze lower layers to prevent overfitting
