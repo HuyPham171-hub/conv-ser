@@ -41,7 +41,7 @@ class DialogueSequenceDataset(Dataset):
                 if utt_id not in self.stage1_outputs or utt_id not in self.stage2_outputs:
                     continue 
                 
-                v_stage1 = self.stage1_outputs[utt_id]['features'].squeeze() # Adjust key based on your Stage 1 dict structure
+                v_stage1 = self.stage1_outputs[utt_id]['v_stage1'].squeeze() # Adjust key based on your Stage 1 dict structure
                 v_gated = self.stage2_outputs[utt_id]['v_gated'].squeeze()
                 
                 # Concatenate heterogeneous features: V_concat = [V_stage1, V_gated]

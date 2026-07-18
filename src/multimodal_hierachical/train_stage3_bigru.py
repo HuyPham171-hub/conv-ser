@@ -266,7 +266,7 @@ def main():
     
     # Infer concatenated input dimension from the first valid utterance
     sample_utt = list(stage2_global.keys())[0]
-    dim_s1 = stage1_global[sample_utt]['features'].shape[-1]
+    dim_s1 = stage1_global[sample_utt]['v_stage1'].shape[-1]
     dim_s2 = stage2_global[sample_utt]['v_gated'].shape[-1]
     dynamic_input_dim = dim_s1 + dim_s2
     print(f"[INFO] Inferred Heterogeneous Feature Dimension: {dim_s1} + {dim_s2} = {dynamic_input_dim}")
